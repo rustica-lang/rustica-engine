@@ -1,3 +1,5 @@
+/.idea/
 /*.so
 /src/*.bc
 /src/*.o
+/vendor/
