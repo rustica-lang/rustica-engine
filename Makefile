@@ -218,5 +218,9 @@ clean-vendor:
 $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.o: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.s
 	as -o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.s
 
+.PHONY: format
+format:
+	find src -name '*.h' -o -name "*.c" | xargs clang-format -i
+
 %.bc:
 	@true
