@@ -70,8 +70,9 @@ compile_wasm(PG_FUNCTION_ARGS) {
     comp_ctx = aot_create_comp_context(comp_data, &option);
     aot_compile_wasm(comp_ctx);
 
-    void *obj_data = aot_obj_data_create(comp_ctx);
-    uint32_t aot_file_size = get_aot_file_size(comp_ctx, comp_data, obj_data);
+    AOTObjectData *obj_data = aot_obj_data_create(comp_ctx);
+    uint32_t aot_file_size =
+        aot_get_aot_file_size(comp_ctx, comp_data, obj_data);
     bytea *rv = (bytea *)palloc(aot_file_size + VARHDRSZ);
     SET_VARSIZE(rv, aot_file_size + VARHDRSZ);
     aot_emit_aot_file_buf_ex(comp_ctx,

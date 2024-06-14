@@ -1,0 +1,182 @@
+From 8323789869dea5f60f7de6fc9cba0a4237dc62b5 Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Fri, 14 Jun 2024 15:07:43 +0800
+Subject: [PATCH] Remove the exposure of AOTObjectData
+
+---
+ core/iwasm/compilation/aot_emit_aot_file.c | 65 +++++++++++++++++++++-
+ core/iwasm/compilation/aot_emit_aot_file.h | 63 +--------------------
+ 2 files changed, 65 insertions(+), 63 deletions(-)
+
+diff --git a/core/iwasm/compilation/aot_emit_aot_file.c b/core/iwasm/compilation/aot_emit_aot_file.c
+index 357e726f..91eeb305 100644
+--- a/core/iwasm/compilation/aot_emit_aot_file.c
++++ b/core/iwasm/compilation/aot_emit_aot_file.c
+@@ -25,6 +25,65 @@
+         }                                                  \
+     } while (0)
+ 
++/* Internal function in object file */
++typedef struct AOTObjectFunc {
++    char *func_name;
++    /* text offset of aot_func#n */
++    uint64 text_offset;
++    /* text offset of aot_func_internal#n */
++    uint64 text_offset_of_aot_func_internal;
++} AOTObjectFunc;
++
++/* Symbol table list node */
++typedef struct AOTSymbolNode {
++    struct AOTSymbolNode *next;
++    uint32 str_len;
++    char *symbol;
++} AOTSymbolNode;
++
++typedef struct AOTSymbolList {
++    AOTSymbolNode *head;
++    AOTSymbolNode *end;
++    uint32 len;
++} AOTSymbolList;
++
++/* AOT object data */
++typedef struct AOTObjectData {
++    AOTCompContext *comp_ctx;
++
++    LLVMMemoryBufferRef mem_buf;
++    LLVMBinaryRef binary;
++
++    AOTTargetInfo target_info;
++
++    void *text;
++    uint32 text_size;
++
++    void *text_unlikely;
++    uint32 text_unlikely_size;
++
++    void *text_hot;
++    uint32 text_hot_size;
++
++    /* literal data and size */
++    void *literal;
++    uint32 literal_size;
++
++    AOTObjectDataSection *data_sections;
++    uint32 data_sections_count;
++
++    AOTObjectFunc *funcs;
++    uint32 func_count;
++
++    AOTSymbolList symbol_list;
++    AOTRelocationGroup *relocation_groups;
++    uint32 relocation_group_count;
++
++    const char *stack_sizes_section_name;
++    uint32 stack_sizes_offset;
++    uint32 *stack_sizes;
++} AOTObjectData;
++
+ #if 0
+ static void dump_buf(uint8 *buf, uint32 size, char *title)
+ {
+@@ -1131,8 +1190,8 @@ static uint32
+ get_custom_sections_size(AOTCompContext *comp_ctx, AOTCompData *comp_data);
+ 
+ uint32
+-get_aot_file_size(AOTCompContext *comp_ctx, AOTCompData *comp_data,
+-                  AOTObjectData *obj_data)
++aot_get_aot_file_size(AOTCompContext *comp_ctx, AOTCompData *comp_data,
++                      AOTObjectData *obj_data)
+ {
+     uint32 size = 0;
+     uint32 size_custom_section = 0;
+@@ -4390,7 +4449,7 @@ aot_emit_aot_file_buf(AOTCompContext *comp_ctx, AOTCompData *comp_data,
+     if (!obj_data)
+         return NULL;
+ 
+-    aot_file_size = get_aot_file_size(comp_ctx, comp_data, obj_data);
++    aot_file_size = aot_get_aot_file_size(comp_ctx, comp_data, obj_data);
+     if (aot_file_size == 0) {
+         aot_set_last_error("get aot file size failed");
+         goto fail1;
+diff --git a/core/iwasm/compilation/aot_emit_aot_file.h b/core/iwasm/compilation/aot_emit_aot_file.h
+index 91797903..82df06b2 100644
+--- a/core/iwasm/compilation/aot_emit_aot_file.h
++++ b/core/iwasm/compilation/aot_emit_aot_file.h
+@@ -12,71 +12,14 @@
+ extern "C" {
+ #endif
+ 
+-/* Internal function in object file */
+-typedef struct AOTObjectFunc {
+-    char *func_name;
+-    /* text offset of aot_func#n */
+-    uint64 text_offset;
+-    /* text offset of aot_func_internal#n */
+-    uint64 text_offset_of_aot_func_internal;
+-} AOTObjectFunc;
+-
+-/* Symbol table list node */
+-typedef struct AOTSymbolNode {
+-    struct AOTSymbolNode *next;
+-    uint32 str_len;
+-    char *symbol;
+-} AOTSymbolNode;
+-
+-typedef struct AOTSymbolList {
+-    AOTSymbolNode *head;
+-    AOTSymbolNode *end;
+-    uint32 len;
+-} AOTSymbolList;
+-
+-/* AOT object data */
+-typedef struct AOTObjectData {
+-    AOTCompContext *comp_ctx;
+-
+-    LLVMMemoryBufferRef mem_buf;
+-    LLVMBinaryRef binary;
+-
+-    AOTTargetInfo target_info;
+-
+-    void *text;
+-    uint32 text_size;
+-
+-    void *text_unlikely;
+-    uint32 text_unlikely_size;
+-
+-    void *text_hot;
+-    uint32 text_hot_size;
+-
+-    /* literal data and size */
+-    void *literal;
+-    uint32 literal_size;
+-
+-    AOTObjectDataSection *data_sections;
+-    uint32 data_sections_count;
+-
+-    AOTObjectFunc *funcs;
+-    uint32 func_count;
+-
+-    AOTSymbolList symbol_list;
+-    AOTRelocationGroup *relocation_groups;
+-    uint32 relocation_group_count;
+-
+-    const char *stack_sizes_section_name;
+-    uint32 stack_sizes_offset;
+-    uint32 *stack_sizes;
+-} AOTObjectData;
++typedef struct AOTObjectData AOTObjectData;
+ 
+ AOTObjectData *
+ aot_obj_data_create(AOTCompContext *comp_ctx);
+ 
+ uint32
+-get_aot_file_size(AOTCompContext *comp_ctx, AOTCompData *comp_data,
+-                  AOTObjectData *obj_data);
++aot_get_aot_file_size(AOTCompContext *comp_ctx, AOTCompData *comp_data,
++                      AOTObjectData *obj_data);
+ 
+ bool
+ aot_emit_aot_file(AOTCompContext *comp_ctx, AOTCompData *comp_data,
+-- 
+2.45.1
+

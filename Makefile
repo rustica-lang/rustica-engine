@@ -187,6 +187,7 @@ $(VENDOR_DIR):
 	tar xvf $(WAMR_TARBALL) -C $(WAMR_DIR) --strip-components=1
 	patch -p1 -d vendor/wamr-2.1.0 < patches/0001-Add-aot_emit_aot_file.h.patch
 	patch -p1 -d vendor/wamr-2.1.0 < patches/0002-Extract-aot_emit_aot_file_buf_ex-and-expose-friends.patch
+	patch -p1 -d vendor/wamr-2.1.0 < patches/0003-Remove-the-exposure-of-AOTObjectData.patch
 
 DEV_PG_TARBALL = "$(VENDOR_DIR)/pg-$(DEV_PG_VERSION).tar.gz"
 CLEAN_ENV = env -i PATH=$(PATH) HOME=$(HOME) USER=$(USER)
