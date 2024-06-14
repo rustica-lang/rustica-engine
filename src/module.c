@@ -5,6 +5,8 @@
 #include "wasm_export.h"
 #include "wasm_memory.h"
 #include "aot_emit_aot_file.h"
+#include "postmaster/bgworker.h"
+#include "rustica_wamr.h"
 
 PG_MODULE_MAGIC;
 
@@ -17,12 +19,25 @@ noop_realloc(void *ptr, size_t size) {
 
 void
 _PG_init() {
+    rst_init_gucs();
+
     MemAllocOption mem_option = { 0 };
     mem_option.allocator.malloc_func = palloc;
     mem_option.allocator.realloc_func = noop_realloc;
     mem_option.allocator.free_func = pfree;
     wasm_runtime_memory_init(Alloc_With_Allocator, &mem_option);
     aot_compiler_init();
+
+    BackgroundWorker master;
+    snprintf(master.bgw_name, BGW_MAXLEN, "头燕");
+    snprintf(master.bgw_type, BGW_MAXLEN, "头燕");
+    master.bgw_flags = BGWORKER_SHMEM_ACCESS;
+    master.bgw_start_time = BgWorkerStart_PostmasterStart;
+    master.bgw_restart_time = 10;
+    snprintf(master.bgw_library_name, BGW_MAXLEN, "rustica-wamr");
+    snprintf(master.bgw_function_name, BGW_MAXLEN, "rustica_master");
+    master.bgw_notify_pid = 0;
+    RegisterBackgroundWorker(&master);
 }
 
 Datum
