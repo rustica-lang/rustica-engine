@@ -66,20 +66,57 @@ compile_wasm(PG_FUNCTION_ARGS) {
                                     wasm_size,
                                     error_buf,
                                     sizeof(error_buf));
+    if (!wasm_module) {
+        ereport(ERROR, (errmsg("failed to load WASM module: %s", error_buf)));
+        PG_RETURN_NULL();
+    }
     comp_data = aot_create_comp_data(wasm_module, option.target_arch, true);
+    if (!comp_data) {
+        ereport(ERROR,
+                (errmsg("could not create compilation data: %s",
+                        aot_get_last_error())));
+        PG_RETURN_NULL();
+    }
     comp_ctx = aot_create_comp_context(comp_data, &option);
-    aot_compile_wasm(comp_ctx);
+    if (!comp_ctx) {
+        ereport(ERROR,
+                (errmsg("could not create compilation context: %s",
+                        aot_get_last_error())));
+        PG_RETURN_NULL();
+    }
+    if (!aot_compile_wasm(comp_ctx)) {
+        ereport(ERROR,
+                (errmsg("failed to compile wasm module: %s",
+                        aot_get_last_error())));
+        PG_RETURN_NULL();
+    }
 
     AOTObjectData *obj_data = aot_obj_data_create(comp_ctx);
+    if (!obj_data) {
+        ereport(
+            ERROR,
+            (errmsg("could not create object data: %s", aot_get_last_error())));
+        PG_RETURN_NULL();
+    }
     uint32_t aot_file_size =
         aot_get_aot_file_size(comp_ctx, comp_data, obj_data);
     bytea *rv = (bytea *)palloc(aot_file_size + VARHDRSZ);
+    if (!rv) {
+        ereport(ERROR,
+                (errmsg("could not allocate memory (size=%u) for aot file",
+                        aot_file_size)));
+        PG_RETURN_NULL();
+    }
     SET_VARSIZE(rv, aot_file_size + VARHDRSZ);
-    aot_emit_aot_file_buf_ex(comp_ctx,
-                             comp_data,
-                             obj_data,
-                             VARDATA(rv),
-                             aot_file_size);
+    if (!aot_emit_aot_file_buf_ex(comp_ctx,
+                                  comp_data,
+                                  obj_data,
+                                  VARDATA(rv),
+                                  aot_file_size)) {
+        ereport(ERROR,
+                (errmsg("Failed to emit aot file: %s", aot_get_last_error())));
+        PG_RETURN_NULL();
+    }
     aot_obj_data_destroy(obj_data);
     PG_RETURN_TEXT_P(rv);
 }
