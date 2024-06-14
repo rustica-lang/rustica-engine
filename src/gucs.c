@@ -5,6 +5,7 @@
 
 char *rst_listen_addresses = NULL;
 int rst_port = 8080;
+char *rst_ipc_dir = NULL;
 
 void
 rst_init_gucs() {
@@ -31,4 +32,15 @@ rst_init_gucs() {
                             NULL,
                             NULL,
                             NULL);
+    DefineCustomStringVariable(
+        "rustica.ipc_socket_directory",
+        "Sets the directory containing the UNIX socket for internal IPC.",
+        "Default is $data_directory.",
+        &rst_ipc_dir,
+        NULL,
+        PGC_USERSET,
+        0,
+        NULL,
+        NULL,
+        NULL);
 }

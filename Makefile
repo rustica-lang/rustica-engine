@@ -88,6 +88,7 @@ OBJS = \
     $(WAMR_IWASM_ROOT)/interpreter/wasm_interp_classic.o \
 	src/module.o \
 	src/gucs.o \
+	src/event_set.o \
 	src/master.o
 
 #	$(WAMR_SHARED_ROOT)/utils/uncommon/bh_read_file.o \
