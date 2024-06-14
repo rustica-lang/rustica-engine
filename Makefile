@@ -4,6 +4,12 @@ WAMR_DIR = $(VENDOR_DIR)/wamr-$(WAMR_VERSION)
 WAMR_CORE_ROOT = $(WAMR_DIR)/core
 WAMR_IWASM_ROOT = $(WAMR_CORE_ROOT)/iwasm
 WAMR_SHARED_ROOT = $(WAMR_CORE_ROOT)/shared
+DEV_PG_VERSION = 16.3
+DEV_PG_SRC = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)
+DEV_PG_INSTALL := $(shell realpath $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)-install)
+DEV_PG_DATA := $(shell realpath $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)-data)
+DEV_PG_LOG := $(shell realpath $(VENDOR_DIR)/pg-$(DEV_PG_VERSION).log)
+DEV = 0
 
 MODULE_big = rustica-wamr
 
@@ -80,6 +86,7 @@ OBJS = \
     $(WAMR_IWASM_ROOT)/interpreter/wasm_runtime.o \
     $(WAMR_IWASM_ROOT)/interpreter/wasm_loader.o \
     $(WAMR_IWASM_ROOT)/interpreter/wasm_interp_classic.o \
+	src/module.o \
 	src/master.o
 
 #	$(WAMR_SHARED_ROOT)/utils/uncommon/bh_read_file.o \
@@ -113,7 +120,7 @@ WAMR_DEFINES = \
 	-DWASM_ENABLE_THREAD_MGR=0 \
 	-DWASM_ENABLE_LIB_WASI_THREADS=0 \
 	-DWASM_ENABLE_GC=1 \
-	-DWASM_GC_MANUALLY=1 \
+	-DWASM_GC_MANUALLY=0 \
 	-DWASM_ENABLE_LIB_PTHREAD=0 \
 	-DWASM_ENABLE_LIB_PTHREAD_SEMAPHORE=0 \
 	-DWASM_DISABLE_HW_BOUND_CHECK=1 \
@@ -160,7 +167,12 @@ SHLIB_LINK += -lLLVM -lstdc++
 EXTENSION = rustica-wamr
 DATA = sql/rustica-wamr--1.0.sql
 
+ifeq ($(DEV),1)
+PG_CONFIG = $(DEV_PG_INSTALL)/bin/pg_config
+PG_CFLAGS += -g
+else
 PG_CONFIG = pg_config
+endif
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 
 include $(PGXS)
@@ -172,6 +184,28 @@ $(VENDOR_DIR):
 		"https://github.com/bytecodealliance/wasm-micro-runtime/archive/refs/tags/WAMR-$(WAMR_VERSION).tar.gz"
 	mkdir -p $(WAMR_DIR)
 	tar xvf $(WAMR_TARBALL) -C $(WAMR_DIR) --strip-components=1
+	patch -p1 -d vendor/wamr-2.1.0 < patches/0001-Add-aot_emit_aot_file.h.patch
+	patch -p1 -d vendor/wamr-2.1.0 < patches/0002-Extract-aot_emit_aot_file_buf_ex-and-expose-friends.patch
+
+DEV_PG_TARBALL = "$(VENDOR_DIR)/pg-$(DEV_PG_VERSION).tar.gz"
+CLEAN_ENV = env -i PATH=$(PATH) HOME=$(HOME) USER=$(USER)
+.PHONY: dev-pg
+dev-pg: $(VENDOR_DIR)
+	wget -O $(DEV_PG_TARBALL) \
+		"https://ftp.postgresql.org/pub/source/v$(DEV_PG_VERSION)/postgresql-$(DEV_PG_VERSION).tar.gz"
+	mkdir -p $(DEV_PG_SRC)
+	tar xvf $(DEV_PG_TARBALL) -C $(DEV_PG_SRC) --strip-components=1
+	mkdir -p $(DEV_PG_INSTALL)
+	cd $(DEV_PG_SRC) && \
+		$(CLEAN_ENV) ./configure --prefix $(DEV_PG_INSTALL) --with-uuid=e2fs --enable-debug && \
+		$(CLEAN_ENV) make -j $(shell nproc) && \
+		$(CLEAN_ENV) make install
+	$(DEV_PG_INSTALL)/bin/initdb -D $(DEV_PG_DATA)
+
+.PHONY: reload
+reload: install
+	$(DEV_PG_INSTALL)/bin/pg_ctl -D $(DEV_PG_DATA) -l $(DEV_PG_LOG) stop || true
+	$(DEV_PG_INSTALL)/bin/pg_ctl -D $(DEV_PG_DATA) -l $(DEV_PG_LOG) start
 
 .PHONY: clean-vendor
 clean-vendor:

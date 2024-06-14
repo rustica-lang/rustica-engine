@@ -1,2 +1,3 @@
 comment = 'The Rustica Database extension - WAMR runtime'
 default_version = '1.0'
+module_pathname = '$libdir/rustica-wamr'
