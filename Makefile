@@ -201,6 +201,7 @@ dev-pg: $(VENDOR_DIR)
 		$(CLEAN_ENV) make -j $(shell nproc) && \
 		$(CLEAN_ENV) make install
 	$(DEV_PG_INSTALL)/bin/initdb -D $(DEV_PG_DATA)
+	echo "shared_preload_libraries = 'rustica-wamr.so'" >> $(DEV_PG_DATA)/postgresql.conf
 
 .PHONY: reload
 reload: install

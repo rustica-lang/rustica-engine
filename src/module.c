@@ -15,6 +15,16 @@ noop_realloc(void *ptr, size_t size) {
     return ptr;
 }
 
+void
+_PG_init() {
+    MemAllocOption mem_option = { 0 };
+    mem_option.allocator.malloc_func = palloc;
+    mem_option.allocator.realloc_func = noop_realloc;
+    mem_option.allocator.free_func = pfree;
+    wasm_runtime_memory_init(Alloc_With_Allocator, &mem_option);
+    aot_compiler_init();
+}
+
 Datum
 compile_wasm(PG_FUNCTION_ARGS) {
     char error_buf[128];
@@ -37,13 +47,6 @@ compile_wasm(PG_FUNCTION_ARGS) {
     bytea *wasm = PG_GETARG_BYTEA_PP(0);
     int32 wasm_size = VARSIZE_ANY_EXHDR(wasm);
 
-    MemAllocOption mem_option = { 0 };
-    mem_option.allocator.malloc_func = palloc;
-    mem_option.allocator.realloc_func = noop_realloc;
-    mem_option.allocator.free_func = pfree;
-    wasm_runtime_memory_init(Alloc_With_Allocator, &mem_option);
-    aot_compiler_init();
-
     wasm_module = wasm_runtime_load(VARDATA_ANY(wasm),
                                     wasm_size,
                                     error_buf,
@@ -62,7 +65,11 @@ compile_wasm(PG_FUNCTION_ARGS) {
                              VARDATA(rv),
                              aot_file_size);
     aot_obj_data_destroy(obj_data);
+    PG_RETURN_TEXT_P(rv);
+}
+
+void
+_PG_fini() {
     aot_compiler_destroy();
     wasm_runtime_memory_destroy();
-    PG_RETURN_TEXT_P(rv);
 }
