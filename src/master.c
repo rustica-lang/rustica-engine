@@ -17,6 +17,7 @@ typedef struct Socket Socket;
 #define TYPE_FRONTEND 2
 #define TYPE_BACKEND 3
 #define MAXLISTEN 64
+#define JOB_QLEN 1024
 static WaitEventSetEx *rm_wait_set = NULL;
 static Socket *sockets;
 static int total_sockets = 0;
@@ -27,6 +28,8 @@ static int idle_qhead = 0, idle_qtail = 0, idle_qsize = 0;
 static int num_workers;
 static BackgroundWorkerHandle **worker_handles;
 static FDMessage fd_msg;
+static pgsocket job_queue[JOB_QLEN];
+static int job_qhead = 0, job_qtail = 0, job_qsize = 0;
 
 typedef struct Socket {
     char type;
@@ -342,11 +345,21 @@ on_frontend(Socket *socket, uint32 events) {
             }
         }
     }
-    StreamClose(sock);
+    if (job_qsize < JOB_QLEN) {
+        job_qsize++;
+        job_queue[job_qtail] = sock;
+        job_qtail = (job_qtail + 1) % JOB_QLEN;
+    }
+    else {
+        ereport(DEBUG1, (errmsg("job queue is full, closing fd=%d", sock)));
+        StreamClose(sock);
+    }
 }
 
 static inline void
 on_backend(Socket *socket, uint32 events) {
+    pgsocket job;
+
     if (events & WL_SOCKET_CLOSED) {
         ereport(DEBUG1, (errmsg("socket is closed: fd=%d", socket->fd)));
         close_socket(socket);
@@ -379,17 +392,38 @@ on_backend(Socket *socket, uint32 events) {
                    buf + i,
                    received - i);
             if (socket->read_offset + received == 12) {
-                ModifyWaitEventEx(rm_wait_set,
-                                  socket->pos,
-                                  WL_SOCKET_CLOSED,
-                                  NULL);
-                Assert(idle_qsize < total_sockets);
-                idle_qsize++;
-                idle_workers[idle_qtail] = socket->pos;
-                idle_qtail = (idle_qtail + 1) % total_sockets;
                 socket->read_offset = 0;
-                ereport(DEBUG1,
-                        (errmsg("rustica-%d is idle", socket->worker_id)));
+
+                if (job_qsize > 0) {
+                    job = job_queue[job_qhead];
+                    *((int *)CMSG_DATA(fd_msg.cmsg)) = job_queue[job_qhead];
+                    if (sendmsg(socket->fd, &fd_msg.msg, 0) < 0) {
+                        ereport(DEBUG1,
+                                (errmsg("socket (fd=%d) is broken: %m",
+                                        socket->fd)));
+                        close_socket(socket);
+                    }
+                    else {
+                        job_qsize--;
+                        job_qhead = (job_qhead + 1) % JOB_QLEN;
+                        ereport(DEBUG1,
+                                (errmsg("dispatched job fd=%d to rustica-%d",
+                                        job,
+                                        socket->worker_id)));
+                    }
+                }
+                else {
+                    ModifyWaitEventEx(rm_wait_set,
+                                      socket->pos,
+                                      WL_SOCKET_CLOSED,
+                                      NULL);
+                    Assert(idle_qsize < total_sockets);
+                    idle_qsize++;
+                    idle_workers[idle_qtail] = socket->pos;
+                    idle_qtail = (idle_qtail + 1) % total_sockets;
+                    ereport(DEBUG1,
+                            (errmsg("rustica-%d is idle", socket->worker_id)));
+                }
                 return;
             }
         }
