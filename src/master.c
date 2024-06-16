@@ -26,6 +26,7 @@ static int *idle_workers;
 static int idle_head = 0, idle_tail = 0, idle_size = 0;
 static int num_workers;
 static BackgroundWorkerHandle **worker_handles;
+static FDMessage fd_msg;
 
 typedef struct Socket {
     char type;
@@ -140,6 +141,18 @@ startup() {
     pqsignal(SIGUSR1, on_sigusr1);
     BackgroundWorkerUnblockSignals();
 
+    memset(&fd_msg, 0, sizeof(FDMessage));
+    fd_msg.io.iov_base = &fd_msg.byte;
+    fd_msg.io.iov_len = 1;
+    fd_msg.msg.msg_iov = &fd_msg.io;
+    fd_msg.msg.msg_iovlen = 1;
+    fd_msg.msg.msg_control = fd_msg.buf;
+    fd_msg.msg.msg_controllen = sizeof(fd_msg.buf);
+    fd_msg.cmsg = CMSG_FIRSTHDR(&fd_msg.msg);
+    fd_msg.cmsg->cmsg_level = SOL_SOCKET;
+    fd_msg.cmsg->cmsg_type = SCM_RIGHTS;
+    fd_msg.cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+
     num_listen_sockets = listen_frontend(&listen_sockets);
     ipc_sock = listen_backend();
     total_sockets = 1 + num_listen_sockets + max_worker_processes;
@@ -226,15 +239,21 @@ on_backend_connect(Socket *socket, uint32 events) {
 }
 
 static inline void
+close_socket(Socket *socket) {
+    DeleteWaitEventEx(rm_wait_set, socket->pos);
+    StreamClose(socket->fd);
+    memset(socket, 0, sizeof(Socket));
+}
+
+static inline void
 on_frontend(Socket *socket, uint32 events) {
     pgsocket sock;
     SockAddr addr;
+    Socket *backend;
 
     if (!(events & WL_SOCKET_ACCEPT))
         return;
 
-    ereport(DEBUG1,
-            (errmsg("accept frontend connection from: fd=%d", socket->fd)));
     addr.salen = sizeof(addr.addr);
     sock = accept(socket->fd, (struct sockaddr *)&addr.addr, &addr.salen);
     if (sock == PGINVALID_SOCKET) {
@@ -244,6 +263,10 @@ on_frontend(Socket *socket, uint32 events) {
         pg_usleep(100000L); // wait 0.1 sec
         return;
     }
+    ereport(DEBUG1,
+            (errmsg("accepted frontend connection fd=%d from: fd=%d",
+                    sock,
+                    socket->fd)));
     if (Log_connections) {
         int ret;
         char remote_host[NI_MAXHOST];
@@ -294,34 +317,59 @@ on_frontend(Socket *socket, uint32 events) {
             num_workers++;
         }
     }
+    while (idle_size > 0) {
+        backend = &sockets[idle_workers[idle_head]];
+        idle_head = (idle_head + 1) % total_sockets;
+        idle_size -= 1;
+        if (backend->type == TYPE_BACKEND) {
+            Assert(backend->type == TYPE_BACKEND);
+            *((int *)CMSG_DATA(fd_msg.cmsg)) = sock;
+            if (sendmsg(backend->fd, &fd_msg.msg, 0) < 0) {
+                ereport(DEBUG1,
+                        (errmsg("socket (fd=%d) is broken: %m", backend->fd)));
+                close_socket(backend);
+            }
+            else {
+                ereport(DEBUG1,
+                        (errmsg("dispatched job fd=%d to rustica-%d",
+                                sock,
+                                backend->worker_id)));
+                ModifyWaitEventEx(rm_wait_set,
+                                  backend->pos,
+                                  WL_SOCKET_READABLE | WL_SOCKET_CLOSED,
+                                  NULL);
+                return;
+            }
+        }
+    }
     StreamClose(sock);
 }
 
 static inline void
 on_backend(Socket *socket, uint32 events) {
     if (events & WL_SOCKET_CLOSED) {
-        ereport(DEBUG1, (errmsg("Socket is closed: fd=%d", socket->fd)));
-        DeleteWaitEventEx(rm_wait_set, socket->pos);
-        StreamClose(socket->fd);
-        memset(socket, 0, sizeof(Socket));
+        ereport(DEBUG1, (errmsg("socket is closed: fd=%d", socket->fd)));
+        close_socket(socket);
     }
     else if (events & WL_SOCKET_READABLE) {
         char buf[12];
         int i;
-        Size received;
+        ssize_t received;
 
         if (socket->read_offset >= 12) {
             ModifyWaitEventEx(rm_wait_set, socket->pos, WL_SOCKET_CLOSED, NULL);
             return;
         }
         received = recv(socket->fd, &buf, 12 - socket->read_offset, 0);
+        if (received < 0) {
+            ereport(DEBUG1, (errmsg("failed in recv fd=%d: %m", socket->fd)));
+            close_socket(socket);
+        }
         for (i = 0; i < Min(8 - socket->read_offset, received); i++) {
             if (BACKEND_HELLO[socket->read_offset + i] != buf[i]) {
                 ereport(LOG,
                         (errmsg("Bad hello from backend: fd=%d", socket->fd)));
-                DeleteWaitEventEx(rm_wait_set, socket->pos);
-                StreamClose(socket->fd);
-                memset(socket, 0, sizeof(Socket));
+                close_socket(socket);
                 return;
             }
         }
@@ -339,8 +387,10 @@ on_backend(Socket *socket, uint32 events) {
                 idle_size++;
                 idle_workers[idle_tail] = socket->pos;
                 idle_tail = (idle_tail + 1) % total_sockets;
+                socket->read_offset = 0;
                 ereport(DEBUG1,
                         (errmsg("rustica-%d is idle", socket->worker_id)));
+                return;
             }
         }
         socket->read_offset = (uint8_t)(socket->read_offset + received);

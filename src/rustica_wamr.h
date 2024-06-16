@@ -1,6 +1,8 @@
 #ifndef RUSTICA_WAMR_H
 #define RUSTICA_WAMR_H
 
+#include <sys/socket.h>
+
 #include "postgres.h"
 #include <storage/latch.h>
 
@@ -8,6 +10,14 @@
 
 extern char *rst_listen_addresses;
 extern int rst_port;
+
+typedef struct FDMessage {
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+    char buf[CMSG_SPACE(sizeof(int))];
+    struct iovec io;
+    char byte;
+} FDMessage;
 
 void
 rst_init_gucs();

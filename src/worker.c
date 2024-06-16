@@ -17,10 +17,20 @@ static WaitEventSet *wait_set = NULL;
 static bool shutdown_requested = false;
 static char state = WAIT_WRITE;
 static int sent = 0;
+static FDMessage fd_msg;
 
 static void
 startup() {
     struct sockaddr_un addr;
+
+    memset(&fd_msg, 0, sizeof(FDMessage));
+    fd_msg.io.iov_base = &fd_msg.byte;
+    fd_msg.io.iov_len = 1;
+    fd_msg.msg.msg_iov = &fd_msg.io;
+    fd_msg.msg.msg_iovlen = 1;
+    fd_msg.msg.msg_control = fd_msg.buf;
+    fd_msg.msg.msg_controllen = sizeof(fd_msg.buf);
+    fd_msg.cmsg = CMSG_FIRSTHDR(&fd_msg.msg);
 
     wait_set = CreateWaitEventSet(CurrentMemoryContext, 2);
     AddWaitEventToSet(wait_set, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
@@ -71,7 +81,23 @@ on_writeable() {
 }
 
 static inline void
-on_readable() {}
+on_readable() {
+    pgsocket client;
+    char *demo;
+
+    if (recvmsg(sock, &fd_msg.msg, 0) < 0) {
+        ereport(FATAL,
+                (errmsg("rustica-%d: failed to recvmsg: %m", worker_id)));
+    }
+    client = *((int *)CMSG_DATA(fd_msg.cmsg));
+    ereport(DEBUG1,
+            (errmsg("rustica-%d: received job: fd=%d", worker_id, client)));
+    demo = "HTTP/1.0 200 OK\r\nContent-Length: 3\r\n\r\nOk\n";
+    send(client, demo, strlen(demo), 0);
+    StreamClose(client);
+    state = WAIT_WRITE;
+    ModifyWaitEvent(wait_set, 1, WL_SOCKET_WRITEABLE | WL_SOCKET_CLOSED, NULL);
+}
 
 static void
 main_loop() {
