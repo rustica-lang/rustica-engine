@@ -23,7 +23,7 @@ static int total_sockets = 0;
 static bool shutdown_requested = false;
 static bool worker_died = false;
 static int *idle_workers;
-static int idle_head = 0, idle_tail = 0, idle_size = 0;
+static int idle_qhead = 0, idle_qtail = 0, idle_qsize = 0;
 static int num_workers;
 static BackgroundWorkerHandle **worker_handles;
 static FDMessage fd_msg;
@@ -290,7 +290,7 @@ on_frontend(Socket *socket, uint32 events) {
                         remote_host,
                         remote_port)));
     }
-    if (idle_size == 0 && num_workers < max_worker_processes - 2) {
+    if (idle_qsize == 0 && num_workers < max_worker_processes - 2) {
         BackgroundWorker worker;
         BackgroundWorkerHandle **handle;
 
@@ -317,10 +317,10 @@ on_frontend(Socket *socket, uint32 events) {
             num_workers++;
         }
     }
-    while (idle_size > 0) {
-        backend = &sockets[idle_workers[idle_head]];
-        idle_head = (idle_head + 1) % total_sockets;
-        idle_size -= 1;
+    while (idle_qsize > 0) {
+        backend = &sockets[idle_workers[idle_qhead]];
+        idle_qhead = (idle_qhead + 1) % total_sockets;
+        idle_qsize -= 1;
         if (backend->type == TYPE_BACKEND) {
             Assert(backend->type == TYPE_BACKEND);
             *((int *)CMSG_DATA(fd_msg.cmsg)) = sock;
@@ -383,10 +383,10 @@ on_backend(Socket *socket, uint32 events) {
                                   socket->pos,
                                   WL_SOCKET_CLOSED,
                                   NULL);
-                Assert(idle_size < total_sockets);
-                idle_size++;
-                idle_workers[idle_tail] = socket->pos;
-                idle_tail = (idle_tail + 1) % total_sockets;
+                Assert(idle_qsize < total_sockets);
+                idle_qsize++;
+                idle_workers[idle_qtail] = socket->pos;
+                idle_qtail = (idle_qtail + 1) % total_sockets;
                 socket->read_offset = 0;
                 ereport(DEBUG1,
                         (errmsg("rustica-%d is idle", socket->worker_id)));
