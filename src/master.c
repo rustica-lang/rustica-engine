@@ -30,6 +30,7 @@ static BackgroundWorkerHandle **worker_handles;
 static FDMessage fd_msg;
 static pgsocket job_queue[JOB_QLEN];
 static int job_qhead = 0, job_qtail = 0, job_qsize = 0;
+static bool frontend_paused = false;
 
 typedef struct Socket {
     char type;
@@ -349,6 +350,20 @@ on_frontend(Socket *socket, uint32 events) {
         job_qsize++;
         job_queue[job_qtail] = sock;
         job_qtail = (job_qtail + 1) % JOB_QLEN;
+        if (job_qsize == JOB_QLEN) {
+            ereport(DEBUG1,
+                    (errmsg("job queue is full, pause accepting frontend "
+                            "connections")));
+            frontend_paused = true;
+            for (int i = 0; i < total_sockets; i++) {
+                if (sockets[i].type == TYPE_FRONTEND) {
+                    ModifyWaitEventEx(rm_wait_set,
+                                      sockets[i].pos,
+                                      WL_SOCKET_CLOSED,
+                                      NULL);
+                }
+            }
+        }
     }
     else {
         ereport(DEBUG1, (errmsg("job queue is full, closing fd=%d", sock)));
@@ -410,6 +425,20 @@ on_backend(Socket *socket, uint32 events) {
                                 (errmsg("dispatched job fd=%d to rustica-%d",
                                         job,
                                         socket->worker_id)));
+                        if (frontend_paused) {
+                            ereport(DEBUG1,
+                                    (errmsg("resume accepting frontend "
+                                            "connections")));
+                            frontend_paused = false;
+                            for (i = 0; i < total_sockets; i++) {
+                                if (sockets[i].type == TYPE_FRONTEND) {
+                                    ModifyWaitEventEx(rm_wait_set,
+                                                      sockets[i].pos,
+                                                      WL_SOCKET_ACCEPT,
+                                                      NULL);
+                                }
+                            }
+                        }
                     }
                 }
                 else {
