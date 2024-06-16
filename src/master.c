@@ -22,8 +22,11 @@ static WaitEventSetEx *rm_wait_set = NULL;
 static Socket *sockets;
 static int total_sockets = 0;
 static bool shutdown_requested = false;
+static bool worker_died = false;
 static int *idle_workers;
 static int idle_head = 0, idle_tail = 0, idle_size = 0;
+static int num_workers;
+static BackgroundWorkerHandle **worker_handles;
 
 typedef struct Socket {
     char type;
@@ -120,12 +123,19 @@ on_sigterm(SIGNAL_ARGS) {
 }
 
 static void
+on_sigusr1(SIGNAL_ARGS) {
+    worker_died = true;
+    SetLatch(MyLatch);
+}
+
+static void
 startup() {
     pgsocket listen_sockets[MAXLISTEN], ipc_sock;
     int num_listen_sockets;
     Socket *socket;
 
     pqsignal(SIGTERM, on_sigterm);
+    pqsignal(SIGUSR1, on_sigusr1);
     BackgroundWorkerUnblockSignals();
 
     num_listen_sockets = listen_frontend(&listen_sockets);
@@ -137,6 +147,9 @@ startup() {
     rm_wait_set = CreateWaitEventSetEx(CurrentMemoryContext, total_sockets);
     idle_workers = (int *)MemoryContextAllocZero(CurrentMemoryContext,
                                                  sizeof(int) * total_sockets);
+    worker_handles = (BackgroundWorkerHandle *)MemoryContextAllocZero(
+        CurrentMemoryContext,
+        sizeof(BackgroundWorkerHandle *) * max_worker_processes);
 
     socket = &sockets[NextWaitEventPos(rm_wait_set)];
     socket->type = TYPE_UNSET;
@@ -252,6 +265,33 @@ on_frontend(Socket *socket, uint32 events) {
                         remote_host,
                         remote_port)));
     }
+    if (idle_size == 0 && num_workers < max_worker_processes - 2) {
+        BackgroundWorker worker;
+        BackgroundWorkerHandle **handle;
+
+        snprintf(worker.bgw_name, BGW_MAXLEN, "rustica-%d", num_workers);
+        snprintf(worker.bgw_type, BGW_MAXLEN, "rustica worker");
+        worker.bgw_flags =
+            BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
+        worker.bgw_start_time = BgWorkerStart_ConsistentState;
+        worker.bgw_restart_time = BGW_NEVER_RESTART;
+        snprintf(worker.bgw_library_name, BGW_MAXLEN, "rustica-wamr");
+        snprintf(worker.bgw_function_name, BGW_MAXLEN, "rustica_worker");
+        worker.bgw_notify_pid = MyProcPid;
+        worker.bgw_main_arg = Int32GetDatum(num_workers);
+
+        handle = NULL;
+        for (int i = 0; i < max_worker_processes; i++) {
+            if (worker_handles[i] == NULL) {
+                handle = &worker_handles[i];
+                break;
+            }
+        }
+        Assert(handle != NULL);
+        if (RegisterDynamicBackgroundWorker(&worker, handle)) {
+            num_workers++;
+        }
+    }
     StreamClose(sock);
 }
 
@@ -306,6 +346,34 @@ on_backend(Socket *socket, uint32 events) {
 }
 
 static void
+on_worker_died() {
+    int workers = 0;
+    for (int i = 0; i < max_worker_processes; i++) {
+        BgwHandleStatus status;
+        pid_t pid;
+        if (worker_handles[i] != NULL) {
+            status = GetBackgroundWorkerPid(worker_handles[i], &pid);
+            if (status == BGWH_STOPPED) {
+                pfree(worker_handles[i]);
+                worker_handles[i] = NULL;
+            }
+            else {
+                workers++;
+            }
+        }
+    }
+    if (workers < num_workers) {
+        ereport(
+            DEBUG1,
+            (errmsg("%d rustica workers have exited.", num_workers - workers)));
+        num_workers = workers;
+    }
+    else {
+        Assert(workers == num_workers);
+    }
+}
+
+static void
 main_loop() {
     WaitEvent events[MAXLISTEN];
     int nevents;
@@ -321,6 +389,10 @@ main_loop() {
                     return;
                 }
                 ResetLatch(MyLatch);
+                if (worker_died) {
+                    worker_died = false;
+                    on_worker_died();
+                }
             }
             if (socket->type == TYPE_IPC)
                 on_backend_connect(socket, events[i].events);
@@ -335,6 +407,7 @@ main_loop() {
 static void
 teardown() {
     ereport(LOG, (errmsg("rustica master shutting down")));
+    pfree(worker_handles);
     pfree(idle_workers);
     FreeWaitEventSetEx(rm_wait_set);
     rm_wait_set = NULL;

@@ -89,6 +89,7 @@ OBJS = \
 	src/module.o \
 	src/gucs.o \
 	src/event_set.o \
+	src/worker.o \
 	src/master.o
 
 #	$(WAMR_SHARED_ROOT)/utils/uncommon/bh_read_file.o \
