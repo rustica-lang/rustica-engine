@@ -38,8 +38,8 @@ _PG_init() {
     aot_compiler_init();
 
     BackgroundWorker master;
-    snprintf(master.bgw_name, BGW_MAXLEN, "头燕");
-    snprintf(master.bgw_type, BGW_MAXLEN, "头燕");
+    snprintf(master.bgw_name, BGW_MAXLEN, "rustica master");
+    snprintf(master.bgw_type, BGW_MAXLEN, "rustica master");
     master.bgw_flags = BGWORKER_SHMEM_ACCESS;
     master.bgw_start_time = BgWorkerStart_PostmasterStart;
     master.bgw_restart_time = 10;

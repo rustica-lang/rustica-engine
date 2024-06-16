@@ -10,6 +10,7 @@
 
 extern char *rst_listen_addresses;
 extern int rst_port;
+extern int rst_worker_idle_timeout;
 
 typedef struct FDMessage {
     struct msghdr msg;

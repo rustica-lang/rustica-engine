@@ -103,9 +103,18 @@ static void
 main_loop() {
     WaitEvent events[2];
     int nevents;
+    long timeout;
 
+    if (rst_worker_idle_timeout == 0)
+        timeout = -1;
+    else
+        timeout = rst_worker_idle_timeout * 1000;
     for (;;) {
-        nevents = WaitEventSetWait(wait_set, -1, events, 2, 0);
+        nevents = WaitEventSetWait(wait_set, timeout, events, 2, 0);
+        if (nevents == 0 && state == WAIT_READ) {
+            ereport(DEBUG1, (errmsg("rustica-%d: idle timeout", worker_id)));
+            return;
+        }
         for (int i = 0; i < nevents; i++) {
             if (events[i].events & WL_LATCH_SET) {
                 if (shutdown_requested)

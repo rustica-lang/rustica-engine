@@ -295,6 +295,31 @@ on_frontend(Socket *socket, uint32 events) {
                         remote_host,
                         remote_port)));
     }
+    while (idle_qsize > 0) {
+        backend = &sockets[idle_workers[idle_qhead]];
+        idle_qhead = (idle_qhead + 1) % total_sockets;
+        idle_qsize -= 1;
+        if (backend->type == TYPE_BACKEND) {
+            Assert(backend->type == TYPE_BACKEND);
+            *((int *)CMSG_DATA(fd_msg.cmsg)) = sock;
+            if (sendmsg(backend->fd, &fd_msg.msg, 0) < 0) {
+                ereport(DEBUG1,
+                        (errmsg("socket (fd=%d) is broken: %m", backend->fd)));
+                close_socket(backend);
+            }
+            else {
+                ereport(DEBUG1,
+                        (errmsg("dispatched job fd=%d to rustica-%d",
+                                sock,
+                                backend->worker_id)));
+                ModifyWaitEventEx(rm_wait_set,
+                                  backend->pos,
+                                  WL_SOCKET_READABLE | WL_SOCKET_CLOSED,
+                                  NULL);
+                return;
+            }
+        }
+    }
     if (idle_qsize == 0 && num_workers < max_worker_processes - 2) {
         BackgroundWorker worker;
         BackgroundWorkerHandle **handle;
@@ -320,31 +345,6 @@ on_frontend(Socket *socket, uint32 events) {
         Assert(handle != NULL);
         if (RegisterDynamicBackgroundWorker(&worker, handle)) {
             num_workers++;
-        }
-    }
-    while (idle_qsize > 0) {
-        backend = &sockets[idle_workers[idle_qhead]];
-        idle_qhead = (idle_qhead + 1) % total_sockets;
-        idle_qsize -= 1;
-        if (backend->type == TYPE_BACKEND) {
-            Assert(backend->type == TYPE_BACKEND);
-            *((int *)CMSG_DATA(fd_msg.cmsg)) = sock;
-            if (sendmsg(backend->fd, &fd_msg.msg, 0) < 0) {
-                ereport(DEBUG1,
-                        (errmsg("socket (fd=%d) is broken: %m", backend->fd)));
-                close_socket(backend);
-            }
-            else {
-                ereport(DEBUG1,
-                        (errmsg("dispatched job fd=%d to rustica-%d",
-                                sock,
-                                backend->worker_id)));
-                ModifyWaitEventEx(rm_wait_set,
-                                  backend->pos,
-                                  WL_SOCKET_READABLE | WL_SOCKET_CLOSED,
-                                  NULL);
-                return;
-            }
         }
     }
     if (job_qsize < JOB_QLEN) {
@@ -479,9 +479,10 @@ on_worker_died() {
         }
     }
     if (workers < num_workers) {
-        ereport(
-            DEBUG1,
-            (errmsg("%d rustica workers have exited.", num_workers - workers)));
+        ereport(DEBUG1,
+                (errmsg("%d rustica workers have exited, %d remaining",
+                        num_workers - workers,
+                        workers)));
         num_workers = workers;
     }
     else {
