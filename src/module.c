@@ -1,5 +1,6 @@
 #include "postgres.h"
 #include <string.h>
+#include <sys/un.h>
 #include "fmgr.h"
 #include "varatt.h"
 #include "wasm_export.h"
@@ -14,7 +15,15 @@ PG_FUNCTION_INFO_V1(compile_wasm);
 
 void *
 noop_realloc(void *ptr, size_t size) {
-    return ptr;
+    return NULL;
+}
+
+void
+make_ipc_addr(struct sockaddr_un *addr) {
+    memset(addr, 0, sizeof(struct sockaddr_un));
+    addr->sun_family = AF_UNIX;
+    addr->sun_path[0] = '\0';
+    snprintf(&addr->sun_path[1], sizeof(addr->sun_path) - 1, "rustica-ipc");
 }
 
 void

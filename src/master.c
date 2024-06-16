@@ -16,7 +16,6 @@ typedef struct Socket Socket;
 #define TYPE_IPC 1
 #define TYPE_FRONTEND 2
 #define TYPE_BACKEND 3
-#define BACKEND_HELLO "RUSTICA!"
 #define MAXLISTEN 64
 static WaitEventSetEx *rm_wait_set = NULL;
 static Socket *sockets;
@@ -34,7 +33,7 @@ typedef struct Socket {
     int pos;
 
     uint8_t read_offset;
-    uint32_t worker_pid;
+    uint32_t worker_id;
 } Socket;
 
 static int
@@ -96,23 +95,26 @@ listen_frontend(pgsocket *listen_sockets) {
 static pgsocket
 listen_backend() {
     pgsocket ipc_sock;
-    char *socketdir;
-    int status;
+    struct sockaddr_un addr;
+    int err;
 
-    ipc_sock = PGINVALID_SOCKET;
-    socketdir = rst_ipc_dir == NULL ? DataDir : rst_ipc_dir;
-    status = StreamServerPort(AF_UNIX,
-                              NULL,
-                              (unsigned short)rst_port,
-                              socketdir,
-                              &ipc_sock,
-                              1);
-    if (status != STATUS_OK) {
-        ereport(
-            FATAL,
-            (errmsg("could not create Unix-domain socket in directory \"%s\"",
-                    socketdir)));
-    }
+    ipc_sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (ipc_sock == PGINVALID_SOCKET)
+        ereport(FATAL, (errmsg("could not create Unix-domain socket")));
+    make_ipc_addr(&addr);
+    err = bind(ipc_sock, (struct sockaddr *)&addr, sizeof(struct sockaddr_un));
+    if (err < 0)
+        ereport(FATAL,
+                (errmsg("could not bind %s address \"%s\": %m",
+                        "Unix",
+                        &addr.sun_path[1])));
+    err = listen(ipc_sock, max_worker_processes * 2);
+    if (err < 0)
+        ereport(FATAL,
+                (errmsg("could not listen on %s address \"%s\": %m",
+                        "Unix",
+                        &addr.sun_path[1])));
+
     return ipc_sock;
 }
 
@@ -195,7 +197,7 @@ on_backend_connect(Socket *socket, uint32 events) {
         return;
 
     ereport(DEBUG1,
-            (errmsg("Accept backend connection from: fd=%d", socket->fd)));
+            (errmsg("accept backend connection from: fd=%d", socket->fd)));
     addr.salen = sizeof(addr.addr);
     sock = accept(socket->fd, (struct sockaddr *)&addr.addr, &addr.salen);
     if (sock == PGINVALID_SOCKET) {
@@ -232,7 +234,7 @@ on_frontend(Socket *socket, uint32 events) {
         return;
 
     ereport(DEBUG1,
-            (errmsg("Accept frontend connection from: fd=%d", socket->fd)));
+            (errmsg("accept frontend connection from: fd=%d", socket->fd)));
     addr.salen = sizeof(addr.addr);
     sock = accept(socket->fd, (struct sockaddr *)&addr.addr, &addr.salen);
     if (sock == PGINVALID_SOCKET) {
@@ -324,7 +326,7 @@ on_backend(Socket *socket, uint32 events) {
             }
         }
         if (received - i > 0) {
-            memcpy(((char *)&socket->worker_pid)
+            memcpy(((char *)&socket->worker_id)
                        + Max(0, socket->read_offset - 8),
                    buf + i,
                    received - i);
@@ -338,7 +340,7 @@ on_backend(Socket *socket, uint32 events) {
                 idle_workers[idle_tail] = socket->pos;
                 idle_tail = (idle_tail + 1) % total_sockets;
                 ereport(DEBUG1,
-                        (errmsg("Backend %d is idle", socket->worker_pid)));
+                        (errmsg("rustica-%d is idle", socket->worker_id)));
             }
         }
         socket->read_offset = (uint8_t)(socket->read_offset + received);

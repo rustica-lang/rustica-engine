@@ -4,9 +4,10 @@
 #include "postgres.h"
 #include <storage/latch.h>
 
+#define BACKEND_HELLO "RUSTICA!"
+
 extern char *rst_listen_addresses;
 extern int rst_port;
-extern char *rst_ipc_dir;
 
 void
 rst_init_gucs();
@@ -41,5 +42,8 @@ WaitEventSetWaitEx(WaitEventSetEx *set,
 
 void
 FreeWaitEventSetEx(WaitEventSetEx *set);
+
+void
+make_ipc_addr(struct sockaddr_un *addr);
 
 #endif /* RUSTICA_WAMR_H */
