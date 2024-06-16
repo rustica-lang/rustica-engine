@@ -1,0 +1,38 @@
+# Maintainer: yanji tech <db@yanji.tech>
+pkgname=rustica-wamr
+pkgver=1.0
+pkgrel=1
+pkgdesc="Rustica - Rich-Relational DX-first Database"
+arch=('x86_64')
+url="https://yanji.tech/"
+license=('MulanPSL-v2')
+depends=('postgresql' 'llvm')
+makedepends=()
+checkdepends=()
+optdepends=()
+backup=()
+options=()
+install=
+_wamr_revision='d3e89895be21e976231efed50337ac2518f74041'
+source=(
+    "git+file://$(realpath ..)"
+    "https://github.com/bytecodealliance/wasm-micro-runtime/archive/${_wamr_revision}.zip")
+sha256sums=('SKIP'
+            'e4ea0f9c14714c2342feb447f58206349921136d9b0743c0ae400627ce1848bc')
+
+prepare() {
+	cd "${pkgname}"
+	mkdir -p vendor
+	rm -f "vendor/wamr-2.1.0"
+	ln -s "${srcdir}/wasm-micro-runtime-${_wamr_revision}/" "vendor/wamr-2.1.0"
+}
+
+build() {
+	cd "$pkgname"
+	make
+}
+
+package() {
+	cd "$pkgname"
+	make DESTDIR="${pkgdir}" install
+}

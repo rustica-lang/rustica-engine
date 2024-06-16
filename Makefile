@@ -45,7 +45,6 @@ OBJS = \
 	$(WAMR_IWASM_ROOT)/common/gc/gc_common.o \
 	$(WAMR_IWASM_ROOT)/common/gc/gc_type.o \
 	$(WAMR_IWASM_ROOT)/common/gc/gc_object.o \
-	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o \
 	$(WAMR_IWASM_ROOT)/aot/aot_loader.o \
 	$(WAMR_IWASM_ROOT)/aot/arch/aot_reloc_x86_64.o \
 	$(WAMR_IWASM_ROOT)/aot/aot_runtime.o \
@@ -163,7 +162,8 @@ PG_CFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES) \
 
 PG_CPPFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES)
 
-SHLIB_LINK += -lLLVM -lstdc++
+SHLIB_LINK += -lLLVM -lstdc++ \
+	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
 
 ifeq ($(DEBUG_AOT),1)
 	WAMR_DEFINES += \
@@ -235,6 +235,8 @@ clean-vendor:
 
 $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s
 	as -o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s
+
+rustica-wamr.so: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
 
 .PHONY: format
 format:
