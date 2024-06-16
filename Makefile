@@ -44,7 +44,7 @@ OBJS = \
 	$(WAMR_IWASM_ROOT)/common/gc/gc_common.o \
 	$(WAMR_IWASM_ROOT)/common/gc/gc_type.o \
 	$(WAMR_IWASM_ROOT)/common/gc/gc_object.o \
-	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.o \
+	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o \
 	$(WAMR_IWASM_ROOT)/aot/aot_loader.o \
 	$(WAMR_IWASM_ROOT)/aot/arch/aot_reloc_x86_64.o \
 	$(WAMR_IWASM_ROOT)/aot/aot_runtime.o \
@@ -216,8 +216,8 @@ reload: install
 clean-vendor:
 	rm -rf $(VENDOR_DIR)
 
-$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.o: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.s
-	as -o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64.s
+$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s
+	as -o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s
 
 .PHONY: format
 format:
