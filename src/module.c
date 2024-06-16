@@ -8,6 +8,9 @@
 #include "aot_emit_aot_file.h"
 #include "postmaster/bgworker.h"
 #include "rustica_wamr.h"
+#if WASM_ENABLE_DEBUG_AOT != 0
+#include "dwarf_extractor.h"
+#endif
 
 PG_MODULE_MAGIC;
 
@@ -86,6 +89,14 @@ compile_wasm(PG_FUNCTION_ARGS) {
                         aot_get_last_error())));
         PG_RETURN_NULL();
     }
+#if WASM_ENABLE_DEBUG_AOT != 0
+    if (!create_dwarf_extractor(comp_data, "app.wasm")) {
+        ereport(ERROR,
+                (errmsg("could not create dwarf extractor: %s",
+                        aot_get_last_error())));
+        PG_RETURN_NULL();
+    }
+#endif
     comp_ctx = aot_create_comp_context(comp_data, &option);
     if (!comp_ctx) {
         ereport(ERROR,
