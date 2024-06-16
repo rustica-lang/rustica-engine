@@ -16,16 +16,22 @@ typedef struct Socket Socket;
 #define TYPE_IPC 1
 #define TYPE_FRONTEND 2
 #define TYPE_BACKEND 3
+#define BACKEND_HELLO "RUSTICA!"
 #define MAXLISTEN 64
 static WaitEventSetEx *rm_wait_set = NULL;
 static Socket *sockets;
 static int total_sockets = 0;
 static bool shutdown_requested = false;
+static int *idle_workers;
+static int idle_head = 0, idle_tail = 0, idle_size = 0;
 
 typedef struct Socket {
-    int type;
+    char type;
     pgsocket fd;
     int pos;
+
+    uint8_t read_offset;
+    uint32_t worker_pid;
 } Socket;
 
 static int
@@ -129,6 +135,8 @@ startup() {
     sockets = (Socket *)MemoryContextAllocZero(CurrentMemoryContext,
                                                sizeof(Socket) * total_sockets);
     rm_wait_set = CreateWaitEventSetEx(CurrentMemoryContext, total_sockets);
+    idle_workers = (int *)MemoryContextAllocZero(CurrentMemoryContext,
+                                                 sizeof(int) * total_sockets);
 
     socket = &sockets[NextWaitEventPos(rm_wait_set)];
     socket->type = TYPE_UNSET;
@@ -253,15 +261,47 @@ on_backend(Socket *socket, uint32 events) {
         ereport(DEBUG1, (errmsg("Socket is closed: fd=%d", socket->fd)));
         DeleteWaitEventEx(rm_wait_set, socket->pos);
         StreamClose(socket->fd);
-        socket->type = TYPE_UNSET;
+        memset(socket, 0, sizeof(Socket));
     }
     else if (events & WL_SOCKET_READABLE) {
-        char buf[13];
+        char buf[12];
+        int i;
         Size received;
 
-        received = recv(socket->fd, &buf, 12, 0);
-        buf[received] = 0;
-        ereport(DEBUG1, (errmsg("READABLE fd=%d: %s", socket->fd, buf)));
+        if (socket->read_offset >= 12) {
+            ModifyWaitEventEx(rm_wait_set, socket->pos, WL_SOCKET_CLOSED, NULL);
+            return;
+        }
+        received = recv(socket->fd, &buf, 12 - socket->read_offset, 0);
+        for (i = 0; i < Min(8 - socket->read_offset, received); i++) {
+            if (BACKEND_HELLO[socket->read_offset + i] != buf[i]) {
+                ereport(LOG,
+                        (errmsg("Bad hello from backend: fd=%d", socket->fd)));
+                DeleteWaitEventEx(rm_wait_set, socket->pos);
+                StreamClose(socket->fd);
+                memset(socket, 0, sizeof(Socket));
+                return;
+            }
+        }
+        if (received - i > 0) {
+            memcpy(((char *)&socket->worker_pid)
+                       + Max(0, socket->read_offset - 8),
+                   buf + i,
+                   received - i);
+            if (socket->read_offset + received == 12) {
+                ModifyWaitEventEx(rm_wait_set,
+                                  socket->pos,
+                                  WL_SOCKET_CLOSED,
+                                  NULL);
+                Assert(idle_size < total_sockets);
+                idle_size++;
+                idle_workers[idle_tail] = socket->pos;
+                idle_tail = (idle_tail + 1) % total_sockets;
+                ereport(DEBUG1,
+                        (errmsg("Backend %d is idle", socket->worker_pid)));
+            }
+        }
+        socket->read_offset = (uint8_t)(socket->read_offset + received);
     }
 }
 
@@ -295,6 +335,7 @@ main_loop() {
 static void
 teardown() {
     ereport(LOG, (errmsg("rustica master shutting down")));
+    pfree(idle_workers);
     FreeWaitEventSetEx(rm_wait_set);
     rm_wait_set = NULL;
 
