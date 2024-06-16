@@ -31,6 +31,7 @@ static FDMessage fd_msg;
 static pgsocket job_queue[JOB_QLEN];
 static int job_qhead = 0, job_qtail = 0, job_qsize = 0;
 static bool frontend_paused = false;
+static int worker_id_seq = 0;
 
 typedef struct Socket {
     char type;
@@ -298,7 +299,7 @@ on_frontend(Socket *socket, uint32 events) {
         BackgroundWorker worker;
         BackgroundWorkerHandle **handle;
 
-        snprintf(worker.bgw_name, BGW_MAXLEN, "rustica-%d", num_workers);
+        snprintf(worker.bgw_name, BGW_MAXLEN, "rustica-%d", worker_id_seq);
         snprintf(worker.bgw_type, BGW_MAXLEN, "rustica worker");
         worker.bgw_flags =
             BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
@@ -307,7 +308,7 @@ on_frontend(Socket *socket, uint32 events) {
         snprintf(worker.bgw_library_name, BGW_MAXLEN, "rustica-wamr");
         snprintf(worker.bgw_function_name, BGW_MAXLEN, "rustica_worker");
         worker.bgw_notify_pid = MyProcPid;
-        worker.bgw_main_arg = Int32GetDatum(num_workers);
+        worker.bgw_main_arg = Int32GetDatum(worker_id_seq++);
 
         handle = NULL;
         for (int i = 0; i < max_worker_processes; i++) {
