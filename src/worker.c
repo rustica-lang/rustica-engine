@@ -1,10 +1,17 @@
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <wchar.h>
 
 #include "postgres.h"
 #include <miscadmin.h>
 #include <postmaster/bgworker.h>
 #include <libpq/libpq.h>
+#include "access/xact.h"
+#include "executor/spi.h"
+#include "utils/snapmgr.h"
+#include "pgstat.h"
+#include "tcop/utility.h"
+#include "wasm_runtime_common.h"
 
 #include "rustica_wamr.h"
 
@@ -18,6 +25,15 @@ static bool shutdown_requested = false;
 static char state = WAIT_WRITE;
 static int sent = 0;
 static FDMessage fd_msg;
+
+void
+spectest_print_char(wasm_exec_env_t exec_env, int c) {
+    fwprintf(stderr, L"%lc", c);
+}
+
+static NativeSymbol native_symbols[] = {
+    { "print_char", spectest_print_char, "(i)" }
+};
 
 static void
 startup() {
@@ -53,6 +69,11 @@ startup() {
                       sock,
                       NULL,
                       NULL);
+    if (rst_database != NULL)
+        BackgroundWorkerInitializeConnection(rst_database, NULL, 0);
+    if (!wasm_runtime_register_natives("spectest", native_symbols, 1))
+        ereport(FATAL,
+                (errmsg("rustica-%d: could not register natives", worker_id)));
 }
 
 static inline void
@@ -83,17 +104,128 @@ on_writeable() {
 static inline void
 on_readable() {
     pgsocket client;
-    char *demo;
+    char *resp;
+    StringInfoData buf;
+    int ret;
+    bool isnull;
+    bytea *bin_code;
+    char error_buf[128];
+    wasm_module_t module;
+    wasm_module_inst_t instance;
+    wasm_exec_env_t exec_env;
+    wasm_function_inst_t start_func;
 
     if (recvmsg(sock, &fd_msg.msg, 0) < 0) {
         ereport(FATAL,
                 (errmsg("rustica-%d: failed to recvmsg: %m", worker_id)));
     }
     client = *((int *)CMSG_DATA(fd_msg.cmsg));
-    ereport(DEBUG1,
-            (errmsg("rustica-%d: received job: fd=%d", worker_id, client)));
-    demo = "HTTP/1.0 200 OK\r\nContent-Length: 3\r\n\r\nOk\n";
-    send(client, demo, strlen(demo), 0);
+
+    if (rst_database == NULL) {
+        ereport(DEBUG1,
+                (errmsg("rustica-%d: received job: fd=%d", worker_id, client)));
+        resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
+               "37\r\n\r\nrustica.database is never configured\n";
+        send(client, resp, strlen(resp), 0);
+        goto finally1;
+    }
+
+    initStringInfo(&buf);
+    appendStringInfo(&buf, "SELECT bin_code FROM rustica.application");
+
+    SetCurrentStatementStartTimestamp();
+    StartTransactionCommand();
+    SPI_connect();
+    PushActiveSnapshot(GetTransactionSnapshot());
+    debug_query_string = buf.data;
+    pgstat_report_activity(STATE_RUNNING, "loading WASM application");
+
+    ret = SPI_execute(buf.data, true, 1);
+    if (ret != SPI_OK_SELECT || SPI_processed == 0) {
+        resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
+               "29\r\n\r\nrustica.application is empty\n";
+        send(client, resp, strlen(resp), 0);
+        debug_query_string = NULL;
+        goto finally2;
+    }
+
+    bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
+                                             SPI_tuptable->tupdesc,
+                                             1,
+                                             &isnull));
+    debug_query_string = NULL;
+
+    module = wasm_runtime_load(VARDATA_ANY(bin_code),
+                               VARSIZE_ANY_EXHDR(bin_code),
+                               error_buf,
+                               sizeof(error_buf));
+    if (!module) {
+        ereport(WARNING, (errmsg("bad WASM bin_code: %s", error_buf)));
+        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+               "13\r\n\r\nBad bin_code\n";
+        send(client, resp, strlen(resp), 0);
+        goto finally2;
+    }
+
+    pgstat_report_activity(STATE_RUNNING, "running WASM application");
+
+    instance = wasm_runtime_instantiate(module,
+                                        1024,
+                                        1024,
+                                        error_buf,
+                                        sizeof(error_buf));
+    if (!instance) {
+        ereport(WARNING, (errmsg("failed to instantiate: %s", error_buf)));
+        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+               "21\r\n\r\nInstantiation failed\n";
+        send(client, resp, strlen(resp), 0);
+        goto finally3;
+    }
+
+    exec_env = wasm_runtime_create_exec_env(instance, 1024);
+    if (!exec_env) {
+        ereport(WARNING, (errmsg("failed to instantiate WASM application")));
+        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+               "17\r\n\r\nExecution failed\n";
+        send(client, resp, strlen(resp), 0);
+        goto finally4;
+    }
+
+    start_func = wasm_runtime_lookup_function(instance, "_start");
+    if (!start_func) {
+        ereport(WARNING, (errmsg("cannot find WASM entrypoint")));
+        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+               "21\r\n\r\nBad WASM application\n";
+        send(client, resp, strlen(resp), 0);
+        goto finally5;
+    }
+
+    if (wasm_runtime_call_wasm(exec_env, start_func, 0, NULL))
+        resp = "HTTP/1.0 200 OK\r\nContent-Length: "
+               "3\r\n\r\nOK\n";
+    else
+        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+               "32\r\n\r\nFailed to call WASM application\n";
+    send(client, resp, strlen(resp), 0);
+
+finally5:
+    wasm_runtime_destroy_exec_env(exec_env);
+
+finally4:
+    wasm_runtime_deinstantiate(instance);
+
+finally3:
+    wasm_runtime_unload(module);
+
+finally2:
+    SPI_finish();
+    PopActiveSnapshot();
+    CommitTransactionCommand();
+    debug_query_string = NULL;
+    pgstat_report_stat(true);
+    pgstat_report_activity(STATE_IDLE, NULL);
+
+finally1:
     StreamClose(client);
     state = WAIT_WRITE;
     ModifyWaitEvent(wait_set, 1, WL_SOCKET_WRITEABLE | WL_SOCKET_CLOSED, NULL);

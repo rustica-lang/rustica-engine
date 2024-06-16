@@ -1,39 +1,79 @@
-1. Install vendor libraries (WAMR):
+## Production
 
-```
-$ make vendor
-```
+1. Install system dependencies
 
-2. Install PostgreSQL for development:
+    ```
+    $ sudo pacman -S llvm postgresql
+    ```
 
-```
-$ make dev-pg
-```
+2. Build and install
 
-3. Build extension and reload the dev Postgres:
+    ```
+    $ make
+    $ sudo make install
+    ```
 
-```
-$ make reload DEV=1 -j $(nproc)
-```
+## Development
 
-4. Access dev Postgres REPL:
+### Initialization
 
-```
-$ psql -h /tmp postgres
-postgres=# create extension "rustica-wamr" cascade;
-postgres=# select octet_length(compile_wasm('\x0061736d010000000127085e77015e63000160017f00600164000060037f7f7f01640060016400017f60000164006000000217010873706563746573740a7072696e745f63686172000203060503040506070401000503010001060a016401004102fb07010b070a01065f737461727400050901000c01010a7c052301017f034020012000fb0f48044020002001fb0d001000200141016a21010c010b0b0b300201630001640023002000fb0b012203d14504402003d40f0b20012002fb0900002104230020002004fb0e0120040f0b1200200010014100410041011002100141000b0a0041014102410d10020b0700100410031a0b0b2001011d0a00480065006c006c006f002c00200077006f0072006c006400210020'::bytea));
-```
+1. Install system dependencies
 
-5. Optionally, rebuild extension files:
+    ```
+    $ sudo pacman -S llvm lldb
+    ```
 
-```
-$ make clean
-```
+2. Initialize vendor libraries and PostgreSQL for development:
 
-Then repeat step 3.
+    ```
+    $ make dev-pg
+    ```
 
-6. Drop all vendor files:
+### Iteration
 
-```
-$ make clean-vendor
-```
+* Build extension and reload the dev Postgres:
+
+    ```
+    $ make reload DEV=1 -j $(nproc)
+    ```
+
+    You can join this command with tailing the log:
+
+    ```
+    $ make reload DEV=1 -j $(nproc) && tail -f vendor/pg*.log
+    ```
+
+* When you changed settings in Makefile, rebuild extension files:
+
+    ```
+    $ make clean DEV=1
+    ```
+
+* When you need to nuke the environment:
+
+    ```
+    $ make clean-vendor
+    ```
+
+### Testing
+
+1. Convert WASM binary to octets for step 2:
+
+    ```
+    $ xxd -p target/wasm-gc/release/build/main/main.wasm | tr -d '\n'
+    ```
+
+2. Deploy the WASM application:
+
+    ```
+    $ psql -h /tmp postgres
+    postgres=# CREATE EXTENSION "rustica-wamr" CASCADE;
+    postgres=# DELETE FROM rustica.application;
+    postgres=# INSERT INTO rustica.application SELECT code, rustica.compile_wasm(code) FROM (SELECT '\x0061736d01000000010401600000020100030201000401000503010001060100070a01065f737461727400000901000c01000a040102000b0b0100'::bytea AS code) _;
+    ```
+
+3. Invoke the API:
+
+    ```
+    $ curl localhost:8080
+    ```

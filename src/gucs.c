@@ -6,6 +6,7 @@
 char *rst_listen_addresses = NULL;
 int rst_port = 8080;
 int rst_worker_idle_timeout = 60;
+char *rst_database = NULL;
 
 void
 rst_init_gucs() {
@@ -44,4 +45,14 @@ rst_init_gucs() {
                             NULL,
                             NULL,
                             NULL);
+    DefineCustomStringVariable("rustica.database",
+                               "Sets the database that is used by Rustica.",
+                               "Only one database allowed.",
+                               &rst_database,
+                               NULL,
+                               PGC_USERSET,
+                               0,
+                               NULL,
+                               NULL,
+                               NULL);
 }

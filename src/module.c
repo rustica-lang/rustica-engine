@@ -33,12 +33,14 @@ void
 _PG_init() {
     rst_init_gucs();
 
+    if (!wasm_runtime_init()) {
+        ereport(FATAL, (errmsg("cannot initialize WAMR runtime")));
+    }
     MemAllocOption mem_option = { 0 };
     mem_option.allocator.malloc_func = palloc;
     mem_option.allocator.realloc_func = noop_realloc;
     mem_option.allocator.free_func = pfree;
     wasm_runtime_memory_init(Alloc_With_Allocator, &mem_option);
-    aot_compiler_init();
 
     BackgroundWorker master;
     snprintf(master.bgw_name, BGW_MAXLEN, "rustica master");
