@@ -5,7 +5,7 @@
 #include "varatt.h"
 #include "wasm_export.h"
 #include "wasm_memory.h"
-#include "aot_emit_aot_file.h"
+#include "aot_export.h"
 #include "postmaster/bgworker.h"
 #include "rustica_wamr.h"
 #if WASM_ENABLE_DEBUG_AOT != 0
@@ -58,8 +58,8 @@ Datum
 compile_wasm(PG_FUNCTION_ARGS) {
     char error_buf[128];
     wasm_module_t wasm_module = NULL;
-    AOTCompData *comp_data = NULL;
-    AOTCompContext *comp_ctx = NULL;
+    aot_comp_data_t comp_data = NULL;
+    aot_comp_context_t comp_ctx = NULL;
     AOTCompOption option = { 0 };
     option.opt_level = 3;
     option.size_level = 0;
@@ -113,7 +113,7 @@ compile_wasm(PG_FUNCTION_ARGS) {
         PG_RETURN_NULL();
     }
 
-    AOTObjectData *obj_data = aot_obj_data_create(comp_ctx);
+    aot_obj_data_t obj_data = aot_obj_data_create(comp_ctx);
     if (!obj_data) {
         ereport(
             ERROR,
