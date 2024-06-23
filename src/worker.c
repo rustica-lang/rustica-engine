@@ -8,6 +8,7 @@
 #include <libpq/libpq.h>
 #include "access/xact.h"
 #include "executor/spi.h"
+#include "utils/builtins.h"
 #include "utils/snapmgr.h"
 #include "pgstat.h"
 #include "tcop/utility.h"
@@ -25,6 +26,9 @@ static bool shutdown_requested = false;
 static char state = WAIT_WRITE;
 static int sent = 0;
 static FDMessage fd_msg;
+static SPIPlanPtr load_module_plan = NULL;
+static const char *load_module_sql =
+    "SELECT bin_code FROM rustica.modules WHERE name = $1";
 
 void
 spectest_print_char(wasm_exec_env_t exec_env, int c) {
@@ -34,6 +38,51 @@ spectest_print_char(wasm_exec_env_t exec_env, int c) {
 static NativeSymbol native_symbols[] = {
     { "print_char", spectest_print_char, "(i)" }
 };
+
+static bool
+wasm_module_reader_callback(package_type_t module_type,
+                            const char *module_name,
+                            uint8 **p_buffer,
+                            uint32 *p_size) {
+    Datum name_datum;
+    int ret;
+    bool isnull;
+    bytea *bin_code;
+
+    ereport(LOG,
+            (errmsg("wasm_module_reader_callback: load WASM dependency \"%s\"",
+                    module_name)));
+    pgstat_report_activity(STATE_RUNNING, "loading WASM dependency");
+
+    name_datum = CStringGetTextDatum(module_name);
+    debug_query_string = load_module_sql;
+    ret = SPI_execute_plan(load_module_plan, &name_datum, NULL, true, 1);
+
+    if (ret != SPI_OK_SELECT) {
+        ereport(ERROR, (errmsg("SPI_execute_plan failed: error code %d", ret)));
+        pg_unreachable();
+    }
+
+    if (SPI_processed == 0) {
+        ereport(ERROR, (errmsg("Dependency '%s' not found", module_name)));
+        pg_unreachable();
+    }
+
+    bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
+                                             SPI_tuptable->tupdesc,
+                                             1,
+                                             &isnull));
+    debug_query_string = NULL;
+    Assert(!isnull);
+
+    *p_size = VARSIZE_ANY_EXHDR(bin_code);
+    *p_buffer = (uint8 *)VARDATA_ANY(bin_code);
+    Assert(*p_buffer != NULL);
+    return true;
+}
+
+static void
+wasm_module_destroyer_callback(uint8 *buffer, uint32 size) {}
 
 static void
 startup() {
@@ -69,11 +118,35 @@ startup() {
                       sock,
                       NULL,
                       NULL);
-    if (rst_database != NULL)
+    if (rst_database != NULL) {
         BackgroundWorkerInitializeConnection(rst_database, NULL, 0);
+
+        SetCurrentStatementStartTimestamp();
+        StartTransactionCommand();
+        SPI_connect();
+
+        debug_query_string = load_module_sql;
+        load_module_plan = SPI_prepare(load_module_sql, 1, (Oid[1]){ TEXTOID });
+
+        if (!load_module_plan) {
+            ereport(ERROR,
+                    (errmsg("could not prepare SPI plan: %s",
+                            SPI_result_code_string(SPI_result))));
+        }
+
+        if (SPI_keepplan(load_module_plan)) {
+            ereport(ERROR, (errmsg("failed to keep plan")));
+        }
+
+        debug_query_string = NULL;
+        SPI_finish();
+        CommitTransactionCommand();
+    }
     if (!wasm_runtime_register_natives("spectest", native_symbols, 1))
         ereport(FATAL,
                 (errmsg("rustica-%d: could not register natives", worker_id)));
+    wasm_runtime_set_module_reader(wasm_module_reader_callback,
+                                   wasm_module_destroyer_callback);
 }
 
 static inline void
@@ -105,7 +178,7 @@ static inline void
 on_readable() {
     pgsocket client;
     char *resp;
-    StringInfoData buf;
+    Datum name_datum;
     int ret;
     bool isnull;
     bytea *bin_code;
@@ -130,22 +203,20 @@ on_readable() {
         goto finally1;
     }
 
-    initStringInfo(&buf);
-    appendStringInfo(&buf, "SELECT bin_code FROM rustica.application");
-
     SetCurrentStatementStartTimestamp();
     StartTransactionCommand();
+
     SPI_connect();
     PushActiveSnapshot(GetTransactionSnapshot());
-    debug_query_string = buf.data;
+    debug_query_string = load_module_sql;
     pgstat_report_activity(STATE_RUNNING, "loading WASM application");
 
-    ret = SPI_execute(buf.data, true, 1);
+    name_datum = CStringGetTextDatum("main");
+    ret = SPI_execute_plan(load_module_plan, &name_datum, NULL, true, 1);
     if (ret != SPI_OK_SELECT || SPI_processed == 0) {
         resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
-               "29\r\n\r\nrustica.application is empty\n";
+               "23\r\n\r\ncan't find main module\n";
         send(client, resp, strlen(resp), 0);
-        debug_query_string = NULL;
         goto finally2;
     }
 
@@ -155,7 +226,7 @@ on_readable() {
                                              &isnull));
     debug_query_string = NULL;
 
-    module = wasm_runtime_load(VARDATA_ANY(bin_code),
+    module = wasm_runtime_load((uint8 *)VARDATA_ANY(bin_code),
                                VARSIZE_ANY_EXHDR(bin_code),
                                error_buf,
                                sizeof(error_buf));
@@ -268,6 +339,7 @@ main_loop() {
 
 static void
 teardown() {
+    SPI_freeplan(load_module_plan);
     FreeWaitEventSet(wait_set);
     StreamClose(sock);
     sock = PGINVALID_SOCKET;

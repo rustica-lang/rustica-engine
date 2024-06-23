@@ -68,8 +68,8 @@
     ```
     $ psql -h /tmp postgres
     postgres=# CREATE EXTENSION "rustica-wamr" CASCADE;
-    postgres=# DELETE FROM rustica.application;
-    postgres=# INSERT INTO rustica.application SELECT code, rustica.compile_wasm(code) FROM (SELECT '\x0061736d01000000010401600000020100030201000401000503010001060100070a01065f737461727400000901000c01000a040102000b0b0100'::bytea AS code) _;
+    postgres=# DELETE FROM rustica.modules;
+    postgres=# INSERT INTO rustica.modules SELECT 'main', code, rustica.compile_wasm(code) FROM (SELECT '\x0061736d01000000010401600000020100030201000401000503010001060100070a01065f737461727400000901000c01000a040102000b0b0100'::bytea AS code) _;
     ```
 
 3. Invoke the API:

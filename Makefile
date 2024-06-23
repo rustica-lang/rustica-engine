@@ -205,6 +205,7 @@ $(VENDOR_DIR):
 	mkdir -p $(WAMR_DIR)
 	tar xvf $(WAMR_TARBALL) -C $(WAMR_DIR) --strip-components=1
 	patch -p1 -d vendor/wamr-2.1.0 < patches/0001-Expose-more-functions-related-to-emitting-AOT-files.patch
+	patch -p1 -d vendor/wamr-2.1.0 < patches/0002-Allow-loading-of-missing-imports-without-errors-when.patch
 
 DEV_PG_TARBALL = "$(VENDOR_DIR)/pg-$(DEV_PG_VERSION).tar.gz"
 CLEAN_ENV = env -i PATH=$(PATH) HOME=$(HOME) USER=$(USER)

@@ -76,7 +76,7 @@ compile_wasm(PG_FUNCTION_ARGS) {
     bytea *wasm = PG_GETARG_BYTEA_PP(0);
     int32 wasm_size = VARSIZE_ANY_EXHDR(wasm);
 
-    wasm_module = wasm_runtime_load(VARDATA_ANY(wasm),
+    wasm_module = wasm_runtime_load((uint8 *)VARDATA_ANY(wasm),
                                     wasm_size,
                                     error_buf,
                                     sizeof(error_buf));
@@ -133,7 +133,7 @@ compile_wasm(PG_FUNCTION_ARGS) {
     if (!aot_emit_aot_file_buf_ex(comp_ctx,
                                   comp_data,
                                   obj_data,
-                                  VARDATA(rv),
+                                  (uint8 *)VARDATA(rv),
                                   aot_file_size)) {
         ereport(ERROR,
                 (errmsg("Failed to emit aot file: %s", aot_get_last_error())));
