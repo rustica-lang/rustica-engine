@@ -15,6 +15,7 @@
 #include "wasm_runtime_common.h"
 #include "wasm_memory.h"
 #include "aot_runtime.h"
+#include "llhttp.h"
 
 #include "rustica_wamr.h"
 
@@ -35,6 +36,26 @@ static const char *load_module_sql =
 typedef struct Context {
     WaitEventSet *wait_set;
     pgsocket fd;
+
+    llhttp_t http_parser;
+    llhttp_settings_t http_settings;
+    WASMArrayObjectRef current_buf;
+    int32_t bytes_view;
+    wasm_function_inst_t on_message_begin;
+    wasm_function_inst_t on_method;
+    wasm_function_inst_t on_method_complete;
+    wasm_function_inst_t on_url;
+    wasm_function_inst_t on_url_complete;
+    wasm_function_inst_t on_version;
+    wasm_function_inst_t on_version_complete;
+    wasm_function_inst_t on_header_field;
+    wasm_function_inst_t on_header_field_complete;
+    wasm_function_inst_t on_header_value;
+    wasm_function_inst_t on_header_value_complete;
+    wasm_function_inst_t on_headers_complete;
+    wasm_function_inst_t on_body;
+    wasm_function_inst_t on_message_complete;
+
 } Context;
 
 void
@@ -94,10 +115,182 @@ env_send(wasm_exec_env_t exec_env,
     }
 }
 
+static int32_t
+env_parse_http(wasm_exec_env_t exec_env,
+               WASMArrayObjectRef buf,
+               int32_t start,
+               int32_t len) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    char *view = wasm_array_obj_first_elem_addr(buf);
+    llhttp_errno_t rv;
+    ctx->current_buf = buf;
+    rv = llhttp_execute(&ctx->http_parser, view + start, len);
+    ctx->current_buf = NULL;
+    return rv;
+}
+
 static NativeSymbol native_env[] = {
     { "recv", env_recv, "(rii)i" },
     { "send", env_send, "(rii)i" },
+    { "parse_http", env_parse_http, "(rii)i" },
 };
+
+static int
+llhttp_data_cb_impl(wasm_exec_env_t exec_env,
+                    wasm_function_inst_t func,
+                    const char *at,
+                    size_t length) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    if (ctx->bytes_view == -1) {
+        wasm_func_type_t func_type =
+            wasm_runtime_get_function_type(func,
+                                           exec_env->module_inst->module_type);
+        ctx->bytes_view = wasm_func_type_get_param_type(func_type, 0).heap_type;
+    }
+    WASMStructObjectRef view =
+        wasm_struct_obj_new_with_typeidx(exec_env, ctx->bytes_view);
+    wasm_value_t buf_ref, start, len;
+    buf_ref.gc_obj = ctx->current_buf;
+    start.i32 =
+        (int32_t)(at
+                  - (char *)wasm_array_obj_first_elem_addr(ctx->current_buf));
+    len.i32 = (int32_t)length;
+    wasm_struct_obj_set_field(view, 0, &buf_ref);
+    wasm_struct_obj_set_field(view, 1, &start);
+    wasm_struct_obj_set_field(view, 2, &len);
+    wasm_val_t results[1];
+    wasm_val_t args[1] = {
+        { .kind = WASM_EXTERNREF, .of.foreign = view },
+    };
+    if (!wasm_runtime_call_wasm_a(exec_env, func, 1, results, 1, args)) {
+        return -1;
+    }
+    switch (results[0].of.i32) {
+        case 0:
+            return HPE_OK;
+        case 1:
+            return -1;
+        case 2:
+            return HPE_PAUSED;
+    }
+    return -1;
+}
+
+static int
+llhttp_cb_impl(wasm_exec_env_t exec_env, wasm_function_inst_t func) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    wasm_val_t results[1];
+    if (!wasm_runtime_call_wasm_a(exec_env, func, 1, results, 0, NULL)) {
+        return -1;
+    }
+    switch (results[0].of.i32) {
+        case 0:
+            return HPE_OK;
+        case 1:
+            return -1;
+        case 2:
+            return HPE_PAUSED;
+    }
+    return -1;
+}
+
+static int
+on_message_begin(llhttp_t *p) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_cb_impl(exec_env, ctx->on_message_begin);
+}
+
+static int
+on_method(llhttp_t *p, const char *at, size_t length) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_data_cb_impl(exec_env, ctx->on_method, at, length);
+}
+
+static int
+on_method_complete(llhttp_t *p) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_cb_impl(exec_env, ctx->on_method_complete);
+}
+
+static int
+on_url(llhttp_t *p, const char *at, size_t length) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_data_cb_impl(exec_env, ctx->on_url, at, length);
+}
+
+static int
+on_url_complete(llhttp_t *p) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_cb_impl(exec_env, ctx->on_url_complete);
+}
+
+static int
+on_version(llhttp_t *p, const char *at, size_t length) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_data_cb_impl(exec_env, ctx->on_version, at, length);
+}
+
+static int
+on_version_complete(llhttp_t *p) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_cb_impl(exec_env, ctx->on_version_complete);
+}
+
+static int
+on_header_field(llhttp_t *p, const char *at, size_t length) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_data_cb_impl(exec_env, ctx->on_header_field, at, length);
+}
+
+static int
+on_header_field_complete(llhttp_t *p) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_cb_impl(exec_env, ctx->on_header_field_complete);
+}
+
+static int
+on_header_value(llhttp_t *p, const char *at, size_t length) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_data_cb_impl(exec_env, ctx->on_header_value, at, length);
+}
+
+static int
+on_headers_complete(llhttp_t *p) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_cb_impl(exec_env, ctx->on_headers_complete);
+}
+
+static int
+on_header_value_complete(llhttp_t *p) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_cb_impl(exec_env, ctx->on_header_value_complete);
+}
+
+static int
+on_body(llhttp_t *p, const char *at, size_t length) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_data_cb_impl(exec_env, ctx->on_body, at, length);
+}
+
+static int
+on_message_complete(llhttp_t *p) {
+    wasm_exec_env_t exec_env = p->data;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_cb_impl(exec_env, ctx->on_message_complete);
+}
 
 static bool
 wasm_module_reader_callback(package_type_t module_type,
@@ -271,6 +464,90 @@ unload_registered_modules() {
 }
 
 static inline void
+init_llhttp(Context *ctx, wasm_module_inst_t instance) {
+    wasm_function_inst_t func;
+    wasm_func_type_t func_type;
+
+    llhttp_init(&ctx->http_parser, HTTP_REQUEST, &ctx->http_settings);
+    ctx->bytes_view = -1;
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_message_begin"))) {
+        ctx->on_message_begin = func;
+        ctx->http_settings.on_message_begin = on_message_begin;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_method"))) {
+        ctx->on_method = func;
+        ctx->http_settings.on_method = on_method;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_method_complete"))) {
+        ctx->on_method_complete = func;
+        ctx->http_settings.on_method_complete = on_method_complete;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_url"))) {
+        ctx->on_url = func;
+        ctx->http_settings.on_url = on_url;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_url_complete"))) {
+        ctx->on_url_complete = func;
+        ctx->http_settings.on_url_complete = on_url_complete;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_version"))) {
+        ctx->on_version = func;
+        ctx->http_settings.on_version = on_version;
+    }
+
+    if ((func =
+             wasm_runtime_lookup_function(instance, "on_version_complete"))) {
+        ctx->on_version_complete = func;
+        ctx->http_settings.on_version_complete = on_version_complete;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_header_field"))) {
+        ctx->on_header_field = func;
+        ctx->http_settings.on_header_field = on_header_field;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance,
+                                             "on_header_field_complete"))) {
+        ctx->on_header_field_complete = func;
+        ctx->http_settings.on_header_field_complete = on_header_field_complete;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_header_value"))) {
+        ctx->on_header_value = func;
+        ctx->http_settings.on_header_value = on_header_value;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance,
+                                             "on_header_value_complete"))) {
+        ctx->on_header_value_complete = func;
+        ctx->http_settings.on_header_value_complete = on_header_value_complete;
+    }
+
+    if ((func =
+             wasm_runtime_lookup_function(instance, "on_headers_complete"))) {
+        ctx->on_headers_complete = func;
+        ctx->http_settings.on_headers_complete = on_headers_complete;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_body"))) {
+        ctx->on_body = func;
+        ctx->http_settings.on_body = on_body;
+    }
+
+    if ((func =
+             wasm_runtime_lookup_function(instance, "on_message_complete"))) {
+        ctx->on_message_complete = func;
+        ctx->http_settings.on_message_complete = on_message_complete;
+    }
+}
+
+static inline void
 on_readable() {
     pgsocket client;
     char *resp;
@@ -337,8 +614,8 @@ on_readable() {
     pgstat_report_activity(STATE_RUNNING, "running WASM application");
 
     instance = wasm_runtime_instantiate(module,
-                                        1024,
-                                        1024,
+                                        16384,
+                                        512 * 1024,
                                         error_buf,
                                         sizeof(error_buf));
     if (!instance) {
@@ -349,7 +626,7 @@ on_readable() {
         goto finally3;
     }
 
-    exec_env = wasm_runtime_create_exec_env(instance, 1024);
+    exec_env = wasm_runtime_create_exec_env(instance, 16384);
     if (!exec_env) {
         ereport(WARNING, (errmsg("failed to instantiate WASM application")));
         resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
@@ -368,6 +645,9 @@ on_readable() {
                       MyLatch,
                       NULL);
     AddWaitEventToSet(context.wait_set, WL_SOCKET_CLOSED, client, NULL, NULL);
+
+    init_llhttp(&context, instance);
+    context.http_parser.data = exec_env;
 
     start_func = wasm_runtime_lookup_function(instance, "_start");
     if (!start_func) {

@@ -4,14 +4,17 @@ DEBUG = 0
 GC = 1
 VENDOR_DIR = vendor
 WAMR_VERSION = 2.1.0
+LLHTTP_VERSION = 9.2.1
 MODULE_big = rustica-wamr
 
-# WAMR paths
+# Vendor paths
 WAMR_DIR = $(VENDOR_DIR)/wamr-$(WAMR_VERSION)
 WAMR_CORE_ROOT = $(WAMR_DIR)/core
 WAMR_IWASM_ROOT = $(WAMR_CORE_ROOT)/iwasm
 WAMR_SHARED_ROOT = $(WAMR_CORE_ROOT)/shared
 WAMR_TARBALL = $(VENDOR_DIR)/wamr-$(WAMR_VERSION).tar.gz
+LLHTTP_TARBALL = $(VENDOR_DIR)/llhttp-$(LLHTTP_VERSION).tar.gz
+LLHTTP_SRC = $(VENDOR_DIR)/llhttp-$(LLHTTP_VERSION)
 
 # PostgreSQL for development
 ifeq ($(DEV),1)
@@ -90,6 +93,9 @@ OBJS = \
     $(WAMR_IWASM_ROOT)/interpreter/wasm_runtime.o \
     $(WAMR_IWASM_ROOT)/interpreter/wasm_loader.o \
     $(WAMR_IWASM_ROOT)/interpreter/wasm_interp_classic.o \
+    $(LLHTTP_SRC)/src/api.o \
+    $(LLHTTP_SRC)/src/http.o \
+    $(LLHTTP_SRC)/src/llhttp.o \
 	src/module.o \
 	src/gucs.o \
 	src/event_set.o \
@@ -142,7 +148,7 @@ WAMR_DEFINES = \
 	-DWASM_ENABLE_HEAP_AUX_STACK_ALLOCATION=1 \
 	-DWASM_ENABLE_MEMORY64=0
 
-WAMR_INCLUDES = \
+ALL_INCLUDES = \
 	-I$(WAMR_CORE_ROOT) \
 	-I$(WAMR_IWASM_ROOT)/include \
 	-I$(WAMR_IWASM_ROOT)/common \
@@ -153,7 +159,8 @@ WAMR_INCLUDES = \
 	-I$(WAMR_SHARED_ROOT)/platform/include \
 	-I$(WAMR_SHARED_ROOT)/platform/linux \
 	-I$(WAMR_SHARED_ROOT)/utils \
-	-I$(WAMR_SHARED_ROOT)/mem-alloc
+	-I$(WAMR_SHARED_ROOT)/mem-alloc \
+	-I$(LLHTTP_SRC)/include
 
 ifeq ($(DEBUG),1)
 	WAMR_DEFINES += \
@@ -168,7 +175,7 @@ ifeq ($(DEBUG),1)
 		$(WAMR_IWASM_ROOT)/aot/debug/elf_parser.o \
 		$(WAMR_IWASM_ROOT)/aot/debug/jit_debug.o \
 		$(WAMR_IWASM_ROOT)/compilation/debug/dwarf_extractor.o
-	WAMR_INCLUDES += \
+	ALL_INCLUDES += \
 		-I$(WAMR_IWASM_ROOT)/aot/debug \
 		-I$(WAMR_IWASM_ROOT)/compilation/debug
 	SHLIB_LINK += -llldb
@@ -186,16 +193,18 @@ ifeq ($(GC),1)
 		$(WAMR_IWASM_ROOT)/common/gc/gc_type.o \
 		$(WAMR_IWASM_ROOT)/common/gc/gc_object.o \
 		$(WAMR_IWASM_ROOT)/compilation/aot_emit_gc.o
-	WAMR_INCLUDES += \
+	ALL_INCLUDES += \
 		-I$(WAMR_IWASM_ROOT)/common/gc
 endif
 
 PG_CFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES) \
 	-Wno-incompatible-pointer-types \
 	-Wno-int-conversion \
+	-Wno-declaration-after-statement \
+	-Wno-missing-prototypes \
 	-Wno-implicit-function-declaration
 
-PG_CPPFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES)
+PG_CPPFLAGS += $(WAMR_DEFINES) $(ALL_INCLUDES)
 
 SHLIB_LINK += -lLLVM -lstdc++ \
 	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
@@ -220,7 +229,7 @@ $(WAMR_TARBALL):
 	wget -O $(WAMR_TARBALL) \
 		"https://github.com/bytecodealliance/wasm-micro-runtime/archive/refs/tags/WAMR-$(WAMR_VERSION).tar.gz"
 
-$(WAMR_DIR): $(WAMR_TARBALL)
+$(WAMR_DIR)/.stub: $(WAMR_TARBALL)
 	mkdir -p $(WAMR_DIR)
 	tar xvf $(WAMR_TARBALL) -C $(WAMR_DIR) --strip-components=1
 	patch -p1 -d $(WAMR_DIR) < patches/0001-Expose-more-functions-related-to-emitting-AOT-files.patch
@@ -230,20 +239,31 @@ $(WAMR_DIR): $(WAMR_TARBALL)
 	patch -p1 -d $(WAMR_DIR) < patches/0005-Support-circular-calls-when-multi-module-enabled.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0006-wamrc-allow-building-without-DUMP_CALL_STACK.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0007-HACK-expose-registered_module_list.patch
-
-$(WAMR_DIR)/.stub: $(WAMR_DIR)
 	echo > $(WAMR_DIR)/.stub
 
 include $(WAMR_DIR)/.stub
 
 # Include ASM manually because LLVM can't generate bytecode from ASM
-$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s: $(WAMR_DIR)
+$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s: $(WAMR_DIR)/.stub
 
 %.o : %.s
 	@if test ! -d $(DEPDIR); then mkdir -p $(DEPDIR); fi
 	$(COMPILE.c) -o $@ $< -MMD -MP -MF $(DEPDIR)/$(*F).Po
 
 all-shared-lib: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
+
+# llhttp source
+$(LLHTTP_TARBALL):
+	mkdir -p $(VENDOR_DIR)
+	wget -O $(LLHTTP_TARBALL) \
+		"https://github.com/nodejs/llhttp/archive/refs/tags/release/v$(LLHTTP_VERSION).tar.gz"
+
+$(LLHTTP_SRC)/.stub: $(LLHTTP_TARBALL)
+	mkdir -p $(LLHTTP_SRC)
+	tar xvf $(LLHTTP_TARBALL) -C $(LLHTTP_SRC) --strip-components=1
+	echo > $(LLHTTP_SRC)/.stub
+
+include $(LLHTTP_SRC)/.stub
 
 # Development commands
 ifeq ($(DEV),1)
