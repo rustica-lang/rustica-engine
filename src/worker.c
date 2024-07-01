@@ -13,6 +13,8 @@
 #include "pgstat.h"
 #include "tcop/utility.h"
 #include "wasm_runtime_common.h"
+#include "wasm_memory.h"
+#include "aot_runtime.h"
 
 #include "rustica_wamr.h"
 
@@ -35,9 +37,19 @@ spectest_print_char(wasm_exec_env_t exec_env, int c) {
     fwprintf(stderr, L"%lc", c);
 }
 
-static NativeSymbol native_symbols[] = {
+static NativeSymbol spectest[] = {
     { "print_char", spectest_print_char, "(i)" }
 };
+
+int
+env_malloc(wasm_exec_env_t exec_env, int size) {
+    return (int)wasm_runtime_module_malloc(
+        wasm_exec_env_get_module_inst(exec_env),
+        size,
+        NULL);
+}
+
+static NativeSymbol native_env[] = { { "malloc", env_malloc, "(i)i" } };
 
 static bool
 wasm_module_reader_callback(package_type_t module_type,
@@ -87,6 +99,12 @@ wasm_module_destroyer_callback(uint8 *buffer, uint32 size) {}
 static void
 startup() {
     struct sockaddr_un addr;
+
+    MemAllocOption mem_option = { 0 };
+    mem_option.allocator.malloc_func = palloc;
+    mem_option.allocator.realloc_func = repalloc;
+    mem_option.allocator.free_func = pfree;
+    wasm_runtime_memory_init(Alloc_With_Allocator, &mem_option);
 
     memset(&fd_msg, 0, sizeof(FDMessage));
     fd_msg.io.iov_base = &fd_msg.byte;
@@ -142,7 +160,10 @@ startup() {
         SPI_finish();
         CommitTransactionCommand();
     }
-    if (!wasm_runtime_register_natives("spectest", native_symbols, 1))
+    if (!wasm_runtime_register_natives("spectest", spectest, 1))
+        ereport(FATAL,
+                (errmsg("rustica-%d: could not register natives", worker_id)));
+    if (!wasm_runtime_register_natives("env", native_env, 1))
         ereport(FATAL,
                 (errmsg("rustica-%d: could not register natives", worker_id)));
     wasm_runtime_set_module_reader(wasm_module_reader_callback,
@@ -172,6 +193,30 @@ on_writeable() {
                         WL_SOCKET_READABLE | WL_SOCKET_CLOSED,
                         NULL);
     }
+}
+
+static void
+unload_registered_modules() {
+    bh_list *registered_module_list = wasm_runtime_get_registered_modules();
+    WASMRegisteredModule *module = NULL, *module_next;
+
+    module = bh_list_first_elem(registered_module_list);
+    while (module) {
+        module_next = bh_list_elem_next(module);
+        if (module->module->module_type == Wasm_Module_Bytecode) {
+#if WASM_ENABLE_INTERP != 0
+            wasm_unload((WASMModule *)module->module);
+#endif
+        }
+        else {
+#if WASM_ENABLE_AOT != 0
+            aot_unload((AOTModule *)module->module);
+#endif
+        }
+        module = module_next;
+    }
+    // GOTCHA: NOT FREEING each node here; the memory context should do it
+    bh_list_init(registered_module_list);
 }
 
 static inline void
@@ -289,6 +334,7 @@ finally3:
     wasm_runtime_unload(module);
 
 finally2:
+    unload_registered_modules();
     SPI_finish();
     PopActiveSnapshot();
     CommitTransactionCommand();

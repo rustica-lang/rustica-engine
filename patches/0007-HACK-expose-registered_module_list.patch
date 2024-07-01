@@ -1,0 +1,44 @@
+From 2dcbd6e62467770b0bb64cd2f39d8e6f194d9158 Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Mon, 1 Jul 2024 15:24:00 +0800
+Subject: [PATCH] HACK: expose registered_module_list
+
+---
+ core/iwasm/common/wasm_runtime_common.c | 6 ++++++
+ core/iwasm/common/wasm_runtime_common.h | 3 +++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/core/iwasm/common/wasm_runtime_common.c b/core/iwasm/common/wasm_runtime_common.c
+index 89ab1d19..a2e84ab7 100644
+--- a/core/iwasm/common/wasm_runtime_common.c
++++ b/core/iwasm/common/wasm_runtime_common.c
+@@ -1175,6 +1175,12 @@ wasm_runtime_destroy_registered_module_list()
+     os_mutex_unlock(&registered_module_list_lock);
+ }
+ 
++bh_list *
++wasm_runtime_get_registered_modules()
++{
++    return registered_module_list;
++}
++
+ bool
+ wasm_runtime_add_loading_module(const char *module_name, char *error_buf,
+                                 uint32 error_buf_size)
+diff --git a/core/iwasm/common/wasm_runtime_common.h b/core/iwasm/common/wasm_runtime_common.h
+index 71264ca7..4daa17fa 100644
+--- a/core/iwasm/common/wasm_runtime_common.h
++++ b/core/iwasm/common/wasm_runtime_common.h
+@@ -870,6 +870,9 @@ wasm_runtime_unregister_module(const WASMModuleCommon *module);
+ WASMModuleCommon *
+ wasm_runtime_find_module_registered(const char *module_name);
+ 
++bh_list *
++wasm_runtime_get_registered_modules();
++
+ bool
+ wasm_runtime_add_loading_module(const char *module_name, char *error_buf,
+                                 uint32 error_buf_size);
+-- 
+2.45.2
+

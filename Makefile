@@ -1,31 +1,39 @@
-VENDOR_DIR = ./vendor
+# Shared global config
+DEV = 0
+DEBUG = 0
+GC = 1
+VENDOR_DIR = vendor
 WAMR_VERSION = 2.1.0
+MODULE_big = rustica-wamr
+
+# WAMR paths
 WAMR_DIR = $(VENDOR_DIR)/wamr-$(WAMR_VERSION)
 WAMR_CORE_ROOT = $(WAMR_DIR)/core
 WAMR_IWASM_ROOT = $(WAMR_CORE_ROOT)/iwasm
 WAMR_SHARED_ROOT = $(WAMR_CORE_ROOT)/shared
+WAMR_TARBALL = $(VENDOR_DIR)/wamr-$(WAMR_VERSION).tar.gz
+
+# PostgreSQL for development
+ifeq ($(DEV),1)
 DEV_PG_VERSION = 16.3
+DEV_PG_TARBALL = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION).tar.gz
 DEV_PG_SRC = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)
-DEV_PG_INSTALL := $(shell realpath $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)-install)
-DEV_PG_DATA := $(shell realpath $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)-data)
-DEV_PG_LOG := $(shell realpath $(VENDOR_DIR)/pg-$(DEV_PG_VERSION).log)
-DEV = 0
-DEBUG_AOT = 0
+DEV_PG_INSTALL = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)-install
+DEV_PG_DATA = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)-data
+DEV_PG_LOG = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION).log
+endif
 
-MODULE_big = rustica-wamr
-
+# PGXS config begin
 OBJS = \
 	$(WAMR_SHARED_ROOT)/platform/linux/platform_init.o \
 	$(WAMR_SHARED_ROOT)/platform/common/posix/posix_thread.o \
 	$(WAMR_SHARED_ROOT)/platform/common/posix/posix_time.o \
 	$(WAMR_SHARED_ROOT)/platform/common/posix/posix_malloc.o \
 	$(WAMR_SHARED_ROOT)/platform/common/posix/posix_memmap.o \
-	$(WAMR_SHARED_ROOT)/platform/common/memory/mremap.o \
 	$(WAMR_SHARED_ROOT)/mem-alloc/mem_alloc.o \
 	$(WAMR_SHARED_ROOT)/mem-alloc/ems/ems_kfc.o \
 	$(WAMR_SHARED_ROOT)/mem-alloc/ems/ems_alloc.o \
 	$(WAMR_SHARED_ROOT)/mem-alloc/ems/ems_hmu.o \
-	$(WAMR_SHARED_ROOT)/mem-alloc/ems/ems_gc.o \
 	$(WAMR_SHARED_ROOT)/utils/bh_assert.o \
 	$(WAMR_SHARED_ROOT)/utils/bh_bitmap.o \
 	$(WAMR_SHARED_ROOT)/utils/bh_common.o \
@@ -42,9 +50,6 @@ OBJS = \
 	$(WAMR_IWASM_ROOT)/common/wasm_loader_common.o \
 	$(WAMR_IWASM_ROOT)/common/wasm_memory.o \
 	$(WAMR_IWASM_ROOT)/common/wasm_c_api.o \
-	$(WAMR_IWASM_ROOT)/common/gc/gc_common.o \
-	$(WAMR_IWASM_ROOT)/common/gc/gc_type.o \
-	$(WAMR_IWASM_ROOT)/common/gc/gc_object.o \
 	$(WAMR_IWASM_ROOT)/aot/aot_loader.o \
 	$(WAMR_IWASM_ROOT)/aot/arch/aot_reloc_x86_64.o \
 	$(WAMR_IWASM_ROOT)/aot/aot_runtime.o \
@@ -58,7 +63,6 @@ OBJS = \
     $(WAMR_IWASM_ROOT)/compilation/aot_emit_conversion.o \
     $(WAMR_IWASM_ROOT)/compilation/aot_emit_exception.o \
     $(WAMR_IWASM_ROOT)/compilation/aot_emit_function.o \
-    $(WAMR_IWASM_ROOT)/compilation/aot_emit_gc.o \
     $(WAMR_IWASM_ROOT)/compilation/aot_emit_memory.o \
     $(WAMR_IWASM_ROOT)/compilation/aot_emit_numberic.o \
     $(WAMR_IWASM_ROOT)/compilation/aot_emit_parametric.o \
@@ -92,26 +96,21 @@ OBJS = \
 	src/worker.o \
 	src/master.o
 
-#	$(WAMR_SHARED_ROOT)/utils/uncommon/bh_read_file.o \
-
 WAMR_DEFINES = \
 	-DBUILD_TARGET_X86_64 \
 	-DBH_MALLOC=wasm_runtime_malloc \
 	-DBH_FREE=wasm_runtime_free \
 	-DWASM_ENABLE_LOG=1 \
 	-DWASM_ENABLE_AOT=1 \
-	-DWASM_ENABLE_QUICK_AOT_ENTRY=0 \
+	-DWASM_ENABLE_AOT_INTRINSICS=1 \
+	-DWASM_ENABLE_QUICK_AOT_ENTRY=1 \
 	-DWASM_ENABLE_WORD_ALIGN_READ=0 \
 	-DWASM_MEM_DUAL_BUS_MIRROR=0 \
 	-DWASM_ENABLE_FAST_INTERP=0 \
 	-DWASM_ENABLE_INTERP=1 \
-	-DWASM_ENABLE_MINI_LOADER=1 \
+	-DWASM_ENABLE_MINI_LOADER=0 \
 	-DWASM_ENABLE_SHARED_MEMORY=0 \
 	-DWASM_ENABLE_BULK_MEMORY=1 \
-	-DWASM_ENABLE_AOT_STACK_FRAME=1 \
-	-DWASM_ENABLE_PERF_PROFILING=1 \
-	-DWASM_ENABLE_GC_PERF_PROFILING=0 \
-	-DWASM_ENABLE_DUMP_CALL_STACK=1 \
 	-DWASM_ENABLE_LIBC_BUILTIN=0 \
 	-DWASM_CONFIGURABLE_BOUNDS_CHECKS=0 \
 	-DWASM_ENABLE_LIBC_WASI=0 \
@@ -119,15 +118,14 @@ WAMR_DEFINES = \
 	-DWASM_ENABLE_MULTI_MODULE=1 \
 	-DWASM_ENABLE_THREAD_MGR=0 \
 	-DWASM_ENABLE_LIB_WASI_THREADS=0 \
-	-DWASM_ENABLE_GC=1 \
-	-DWASM_GC_MANUALLY=0 \
 	-DWASM_ENABLE_LIB_PTHREAD=0 \
 	-DWASM_ENABLE_LIB_PTHREAD_SEMAPHORE=0 \
-	-DWASM_DISABLE_HW_BOUND_CHECK=1 \
-	-DWASM_DISABLE_STACK_HW_BOUND_CHECK=1 \
+	-DWASM_DISABLE_HW_BOUND_CHECK=0 \
+	-DWASM_DISABLE_STACK_HW_BOUND_CHECK=0 \
 	-DWASM_DISABLE_WAKEUP_BLOCKING_OP=1 \
-	-DWASM_ENABLE_LOAD_CUSTOM_SECTION=0 \
-	-DWASM_ENABLE_CUSTOM_NAME_SECTION=0 \
+	-DWASM_DISABLE_WRITE_GS_BASE=0 \
+	-DWASM_ENABLE_LOAD_CUSTOM_SECTION=1 \
+	-DWASM_ENABLE_CUSTOM_NAME_SECTION=1 \
 	-DWASM_ENABLE_GLOBAL_HEAP_POOL=0 \
 	-DWASM_MEM_ALLOC_WITH_USAGE=0 \
 	-DWASM_ENABLE_SPEC_TEST=0 \
@@ -137,13 +135,15 @@ WAMR_DEFINES = \
 	-DWASM_ENABLE_TAGS=0 \
 	-DWASM_ENABLE_WAMR_COMPILER=1 \
 	-DWASM_ENABLE_SIMD=1 \
-	-DWASM_ENABLE_MEMORY64=1
+	-DWASM_HAVE_MREMAP=1 \
+	-DWASM_CONFIGURABLE_BOUNDS_CHECKS=0 \
+	-DWASM_ENABLE_HEAP_AUX_STACK_ALLOCATION=1 \
+	-DWASM_ENABLE_MEMORY64=0
 
 WAMR_INCLUDES = \
 	-I$(WAMR_CORE_ROOT) \
 	-I$(WAMR_IWASM_ROOT)/include \
 	-I$(WAMR_IWASM_ROOT)/common \
-	-I$(WAMR_IWASM_ROOT)/common/gc \
 	-I$(WAMR_IWASM_ROOT)/aot \
 	-I$(WAMR_IWASM_ROOT)/compilation \
 	-I$(WAMR_IWASM_ROOT)/interpreter \
@@ -153,7 +153,42 @@ WAMR_INCLUDES = \
 	-I$(WAMR_SHARED_ROOT)/utils \
 	-I$(WAMR_SHARED_ROOT)/mem-alloc
 
-#	-I$(WAMR_SHARED_ROOT)/utils/uncommon \
+ifeq ($(DEBUG),1)
+	WAMR_DEFINES += \
+		-DWASM_ENABLE_AOT_STACK_FRAME=1 \
+		-DWASM_ENABLE_DUMP_CALL_STACK=1 \
+		-DWASM_ENABLE_PERF_PROFILING=0 \
+		-DWASM_ENABLE_GC_PERF_PROFILING=0 \
+		-DWASM_ENABLE_LINUX_PERF=1 \
+		-DWASM_ENABLE_MEMORY_PROFILING=1 \
+		-DWASM_ENABLE_MEMORY_TRACING=1 \
+		-DWASM_ENABLE_DEBUG_AOT=1
+	OBJS += \
+		$(WAMR_IWASM_ROOT)/aot/aot_perf_map.o \
+		$(WAMR_IWASM_ROOT)/aot/debug/elf_parser.o \
+		$(WAMR_IWASM_ROOT)/aot/debug/jit_debug.o \
+		$(WAMR_IWASM_ROOT)/compilation/debug/dwarf_extractor.o
+	WAMR_INCLUDES += \
+		-I$(WAMR_IWASM_ROOT)/aot/debug \
+		-I$(WAMR_IWASM_ROOT)/compilation/debug
+	SHLIB_LINK += -llldb
+	PG_CFLAGS += -g
+	PG_CPPFLAGS += -g
+endif
+
+ifeq ($(GC),1)
+	WAMR_DEFINES += \
+		-DWASM_ENABLE_GC=1 \
+		-DWASM_GC_MANUALLY=0
+	OBJS += \
+		$(WAMR_SHARED_ROOT)/mem-alloc/ems/ems_gc.o \
+		$(WAMR_IWASM_ROOT)/common/gc/gc_common.o \
+		$(WAMR_IWASM_ROOT)/common/gc/gc_type.o \
+		$(WAMR_IWASM_ROOT)/common/gc/gc_object.o \
+		$(WAMR_IWASM_ROOT)/compilation/aot_emit_gc.o
+	WAMR_INCLUDES += \
+		-I$(WAMR_IWASM_ROOT)/common/gc
+endif
 
 PG_CFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES) \
 	-Wno-incompatible-pointer-types \
@@ -165,81 +200,101 @@ PG_CPPFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES)
 SHLIB_LINK += -lLLVM -lstdc++ \
 	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
 
-ifeq ($(DEBUG_AOT),1)
-	WAMR_DEFINES += \
-		-DWASM_ENABLE_MEMORY_PROFILING=1 \
-		-DWASM_ENABLE_MEMORY_TRACING=1 \
-		-DWASM_ENABLE_DEBUG_AOT=1
-	OBJS += \
-		$(WAMR_IWASM_ROOT)/aot/debug/elf_parser.o \
-		$(WAMR_IWASM_ROOT)/aot/debug/jit_debug.o \
-		$(WAMR_IWASM_ROOT)/compilation/debug/dwarf_extractor.o
-	WAMR_INCLUDES += \
-		-I$(WAMR_IWASM_ROOT)/aot/debug \
-		-I$(WAMR_IWASM_ROOT)/compilation/debug
-	SHLIB_LINK += -llldb
-	PG_CFLAGS += -g
-	PG_CPPFLAGS += -g
-else
-	WAMR_DEFINES += -DWASM_ENABLE_DEBUG_AOT=0
-endif
-
 EXTENSION = rustica-wamr
 DATA = sql/rustica-wamr--1.0.sql
 
 ifeq ($(DEV),1)
+include $(DEV_PG_INSTALL)/.stub
 PG_CONFIG = $(DEV_PG_INSTALL)/bin/pg_config
-PG_CFLAGS += -g
 else
 PG_CONFIG = pg_config
 endif
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 
 include $(PGXS)
+# PGXS config end
 
-WAMR_TARBALL = "$(VENDOR_DIR)/wamr-$(WAMR_VERSION).tar.gz"
-$(VENDOR_DIR):
+# WAMR source
+$(WAMR_TARBALL):
 	mkdir -p $(VENDOR_DIR)
 	wget -O $(WAMR_TARBALL) \
 		"https://github.com/bytecodealliance/wasm-micro-runtime/archive/refs/tags/WAMR-$(WAMR_VERSION).tar.gz"
+
+$(WAMR_DIR): $(WAMR_TARBALL)
 	mkdir -p $(WAMR_DIR)
 	tar xvf $(WAMR_TARBALL) -C $(WAMR_DIR) --strip-components=1
-	patch -p1 -d vendor/wamr-2.1.0 < patches/0001-Expose-more-functions-related-to-emitting-AOT-files.patch
-	patch -p1 -d vendor/wamr-2.1.0 < patches/0002-Allow-loading-of-missing-imports-without-errors-when.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0001-Expose-more-functions-related-to-emitting-AOT-files.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0002-Fix-missing-stack-frame-alloc-free-in-AOT-multi-modu.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0003-Allow-missing-imports-in-wasm-loader-and-report-erro.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0004-Optimize-for-multi-module-support-in-AOT-mode.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0005-Support-circular-calls-when-multi-module-enabled.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0006-wamrc-allow-building-without-DUMP_CALL_STACK.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0007-HACK-expose-registered_module_list.patch
 
-DEV_PG_TARBALL = "$(VENDOR_DIR)/pg-$(DEV_PG_VERSION).tar.gz"
-CLEAN_ENV = env -i PATH=$(PATH) HOME=$(HOME) USER=$(USER)
-.PHONY: dev-pg
-dev-pg: $(VENDOR_DIR)
+$(WAMR_DIR)/.stub: $(WAMR_DIR)
+	echo > $(WAMR_DIR)/.stub
+
+include $(WAMR_DIR)/.stub
+
+# Include ASM manually because LLVM can't generate bytecode from ASM
+$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s: $(WAMR_DIR)
+
+%.o : %.s
+	@if test ! -d $(DEPDIR); then mkdir -p $(DEPDIR); fi
+	$(COMPILE.c) -o $@ $< -MMD -MP -MF $(DEPDIR)/$(*F).Po
+
+all-shared-lib: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
+
+# Development commands
+ifeq ($(DEV),1)
+$(DEV_PG_TARBALL):
+	mkdir -p $(VENDOR_DIR)
 	wget -O $(DEV_PG_TARBALL) \
 		"https://ftp.postgresql.org/pub/source/v$(DEV_PG_VERSION)/postgresql-$(DEV_PG_VERSION).tar.gz"
+
+$(DEV_PG_SRC): $(DEV_PG_TARBALL)
 	mkdir -p $(DEV_PG_SRC)
 	tar xvf $(DEV_PG_TARBALL) -C $(DEV_PG_SRC) --strip-components=1
+
+CLEAN_ENV = env -i PATH=$(PATH) HOME=$(HOME) USER=$(USER)
+$(DEV_PG_INSTALL): $(DEV_PG_SRC)
 	mkdir -p $(DEV_PG_INSTALL)
+	$(eval DEV_PG_INSTALL_PREFIX := $(shell realpath $(DEV_PG_INSTALL)))
 	cd $(DEV_PG_SRC) && \
-		$(CLEAN_ENV) ./configure --prefix $(DEV_PG_INSTALL) --with-uuid=e2fs --enable-debug && \
-		$(CLEAN_ENV) make -j $(shell nproc) && \
-		$(CLEAN_ENV) make install
+		$(CLEAN_ENV) ./configure --prefix $(DEV_PG_INSTALL_PREFIX) --with-uuid=e2fs --enable-debug && \
+		$(CLEAN_ENV) $(MAKE) -j $(shell nproc) && \
+		$(CLEAN_ENV) $(MAKE) install
+
+$(DEV_PG_INSTALL)/.stub: $(DEV_PG_INSTALL)
+	echo > $(DEV_PG_INSTALL)/.stub
+
+$(DEV_PG_DATA):
 	$(DEV_PG_INSTALL)/bin/initdb -D $(DEV_PG_DATA)
 	echo "shared_preload_libraries = 'rustica-wamr.so'" >> $(DEV_PG_DATA)/postgresql.conf
+	echo "rustica.database = 'postgres'" >> $(DEV_PG_DATA)/postgresql.conf
+
+%.bc:
+	@true
+
+.PHONY: stop
+stop:
+	@$(DEV_PG_INSTALL)/bin/pg_ctl -D $(DEV_PG_DATA) -l $(DEV_PG_LOG) stop 2>/dev/null || true
 
 .PHONY: reload
-reload: install
-	$(DEV_PG_INSTALL)/bin/pg_ctl -D $(DEV_PG_DATA) -l $(DEV_PG_LOG) stop || true
-	$(DEV_PG_INSTALL)/bin/pg_ctl -D $(DEV_PG_DATA) -l $(DEV_PG_LOG) start
+reload: $(DEV_PG_INSTALL) $(DEV_PG_DATA) stop install
+	$(DEV_PG_INSTALL)/bin/pg_ctl -D $(DEV_PG_DATA) -l $(DEV_PG_LOG) start || tail $(DEV_PG_LOG)
 
-.PHONY: clean-vendor
-clean-vendor:
-	rm -rf $(VENDOR_DIR)
+.PHONY: run
+run: $(DEV_PG_INSTALL) $(DEV_PG_DATA) stop install
+	$(DEV_PG_INSTALL)/bin/postgres -D $(DEV_PG_DATA)
 
-$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s
-	as -o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.s
+endif
 
-rustica-wamr.so: $(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
-
+# All other commands
 .PHONY: format
 format:
 	find src -name '*.h' -o -name "*.c" | xargs clang-format -i
 
-%.bc:
-	@true
+.PHONY: nuke
+nuke: clean
+	rm -rf $(VENDOR_DIR)

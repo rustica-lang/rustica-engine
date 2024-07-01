@@ -308,6 +308,7 @@ on_frontend(Socket *socket, uint32 events) {
                 close_socket(backend);
             }
             else {
+                StreamClose(sock);
                 ereport(DEBUG1,
                         (errmsg("dispatched job fd=%d to rustica-%d",
                                 sock,

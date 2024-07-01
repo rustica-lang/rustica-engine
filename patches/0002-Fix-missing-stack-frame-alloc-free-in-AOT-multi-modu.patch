@@ -1,0 +1,113 @@
+From 89221f40a6f719d0d30fc48b4b359b4cfff0dfff Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Mon, 1 Jul 2024 15:05:14 +0800
+Subject: [PATCH] Fix missing stack frame alloc/free in AOT multi-module invoke
+ (#3562)
+
+Fix #3545 and update the build configuration for multi-module sample:
+- pass debug to AOT-compiled modules
+- support optional DUMP_CALL_STACK
+- support optional GC
+---
+ core/iwasm/aot/aot_runtime.c                  | 14 +++++++++++++
+ samples/multi-module/CMakeLists.txt           | 20 ++++++++++++++++---
+ samples/multi-module/wasm-apps/CMakeLists.txt |  1 +
+ 3 files changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/core/iwasm/aot/aot_runtime.c b/core/iwasm/aot/aot_runtime.c
+index ea068378..8c82883a 100644
+--- a/core/iwasm/aot/aot_runtime.c
++++ b/core/iwasm/aot/aot_runtime.c
+@@ -2801,10 +2801,24 @@ aot_invoke_native(WASMExecEnv *exec_env, uint32 func_idx, uint32 argc,
+                                        "create singleton exec_env failed");
+             goto fail;
+         }
++#if WASM_ENABLE_AOT_STACK_FRAME != 0
++        struct WASMInterpFrame *prev_frame = exec_env->cur_frame;
++
++        if (!aot_alloc_frame(exec_env, func_idx)) {
++            goto fail;
++        }
+ #endif
++#endif /* WASM_ENABLE_MULTI_MODULE != 0 */
+         ret =
+             wasm_runtime_invoke_native(exec_env, func_ptr, func_type, signature,
+                                        attachment, argv, argc, argv);
++#if WASM_ENABLE_MULTI_MODULE != 0 && WASM_ENABLE_AOT_STACK_FRAME != 0
++        /* Free all frames allocated, note that some frames
++           may be allocated in AOT code and haven't been
++           freed if exception occurred */
++        while (exec_env->cur_frame != prev_frame)
++            aot_free_frame(exec_env);
++#endif
+     }
+     else {
+         signature = import_func->signature;
+diff --git a/samples/multi-module/CMakeLists.txt b/samples/multi-module/CMakeLists.txt
+index 7b3fdb85..3c2e8bd2 100644
+--- a/samples/multi-module/CMakeLists.txt
++++ b/samples/multi-module/CMakeLists.txt
+@@ -49,6 +49,12 @@ endif ()
+ if (NOT DEFINED WAMR_BUILD_JIT)
+   set(WAMR_BUILD_JIT 0)
+ endif ()
++if (NOT DEFINED WAMR_BUILD_DUMP_CALL_STACK)
++  set(WAMR_BUILD_DUMP_CALL_STACK 0)
++endif ()
++if (NOT DEFINED WAMR_BUILD_GC)
++  set(WAMR_BUILD_GC 0)
++endif ()
+ set(WAMR_BUILD_SIMD 1)
+ set(WAMR_BUILD_REF_TYPES 1)
+ set(WAMR_BUILD_LIBC_BUILTIN 1)
+@@ -141,6 +147,7 @@ ExternalProject_Add(WASM_MODULE
+                        -DWASI_SDK_PREFIX=${WASI_SDK_DIR}
+                        -DCMAKE_TOOLCHAIN_FILE=${WASI_TOOLCHAIN_FILE}
+                        -DCMAKE_SYSROOT=${WASI_SYS_ROOT}
++                       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+                        -S ${CMAKE_CURRENT_SOURCE_DIR}/wasm-apps
+   BUILD_COMMAND      ${CMAKE_COMMAND} --build .
+   INSTALL_COMMAND    ${CMAKE_COMMAND} -E copy
+@@ -172,17 +179,24 @@ if (WAMR_BUILD_AOT EQUAL 1)
+     message(STATUS "WAMR_COMPILER is ${WAMR_COMPILER}")
+   endif()
+ 
++  if (WAMR_BUILD_DUMP_CALL_STACK EQUAL 1)
++    list(APPEND WAMR_AOT_COMPILE_OPTIONS "--enable-dump-call-stack")
++  endif ()
++  if (WAMR_BUILD_GC EQUAL 1)
++    list(APPEND WAMR_AOT_COMPILE_OPTIONS "--enable-gc")
++  endif ()
++
+   add_custom_target(
+     wasm_to_aot
+     ALL
+     DEPENDS
+     WASM_MODULE ${WAMR_COMPILER}
+     COMMAND
+-    ${WAMR_COMPILER} -o mA.aot ./mA.wasm
++    ${WAMR_COMPILER} ${WAMR_AOT_COMPILE_OPTIONS} -o mA.aot ./mA.wasm
+     COMMAND
+-    ${WAMR_COMPILER} -o mB.aot ./mB.wasm
++    ${WAMR_COMPILER} ${WAMR_AOT_COMPILE_OPTIONS} -o mB.aot ./mB.wasm
+     COMMAND
+-    ${WAMR_COMPILER} -o mC.aot ./mC.wasm
++    ${WAMR_COMPILER} ${WAMR_AOT_COMPILE_OPTIONS} -o mC.aot ./mC.wasm
+     WORKING_DIRECTORY
+     ${CMAKE_BINARY_DIR}
+   )
+diff --git a/samples/multi-module/wasm-apps/CMakeLists.txt b/samples/multi-module/wasm-apps/CMakeLists.txt
+index 0dbfcc2e..8dbb5268 100644
+--- a/samples/multi-module/wasm-apps/CMakeLists.txt
++++ b/samples/multi-module/wasm-apps/CMakeLists.txt
+@@ -57,6 +57,7 @@ function(COMPILE_WITH_CLANG SOURCE_FILE COMMAND)
+ 
+   add_executable(${MAIN_TARGET_NAME} ${SOURCE_FILE})
+   set_target_properties(${MAIN_TARGET_NAME} PROPERTIES OUTPUT_NAME ${WASM_MODULE})
++  target_compile_options (${MAIN_TARGET_NAME} PRIVATE -fno-exceptions)
+ 
+   if(${COMMAND})
+     message(STATUS "Generating ${WASM_MODULE} as COMMAND...")
+-- 
+2.45.2
+

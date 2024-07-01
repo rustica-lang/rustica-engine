@@ -1,6 +1,6 @@
-From ad5d31b9b02938978fb0448237d6136ea9c232b1 Mon Sep 17 00:00:00 2001
+From 83a30acda82560c1342e8cc2b59ee8c72547ee1b Mon Sep 17 00:00:00 2001
 From: Xenia Lu <xenia.lyy@gmail.com>
-Date: Fri, 14 Jun 2024 15:57:45 +0800
+Date: Mon, 1 Jul 2024 15:02:03 +0800
 Subject: [PATCH] Expose more functions related to emitting AOT files (#3520)
 
 - Add declarations related to emitting AOT files into a separate header file

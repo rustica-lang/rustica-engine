@@ -3,23 +3,18 @@
 #include <sys/un.h>
 #include "fmgr.h"
 #include "varatt.h"
-#include "wasm_export.h"
 #include "wasm_memory.h"
 #include "aot_export.h"
 #include "postmaster/bgworker.h"
 #include "rustica_wamr.h"
 #if WASM_ENABLE_DEBUG_AOT != 0
+#include "storage/fd.h"
 #include "dwarf_extractor.h"
 #endif
 
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(compile_wasm);
-
-void *
-noop_realloc(void *ptr, size_t size) {
-    return NULL;
-}
 
 void
 make_ipc_addr(struct sockaddr_un *addr) {
@@ -36,11 +31,6 @@ _PG_init() {
     if (!wasm_runtime_init()) {
         ereport(FATAL, (errmsg("cannot initialize WAMR runtime")));
     }
-    MemAllocOption mem_option = { 0 };
-    mem_option.allocator.malloc_func = palloc;
-    mem_option.allocator.realloc_func = noop_realloc;
-    mem_option.allocator.free_func = pfree;
-    wasm_runtime_memory_init(Alloc_With_Allocator, &mem_option);
 
     BackgroundWorker master;
     snprintf(master.bgw_name, BGW_MAXLEN, "rustica master");
@@ -68,9 +58,14 @@ compile_wasm(PG_FUNCTION_ARGS) {
     option.stack_bounds_checks = 2;
     option.enable_simd = true;
     option.enable_bulk_memory = true;
-    option.enable_ref_types = false;
+#if WASM_ENABLE_DUMP_CALL_STACK != 0
     option.enable_aux_stack_frame = true;
+#endif
+#if WASM_ENABLE_GC != 0
     option.enable_gc = true;
+#else
+    option.enable_ref_types = true;
+#endif
     option.target_arch = "x86_64";
 
     bytea *wasm = PG_GETARG_BYTEA_PP(0);
@@ -92,12 +87,27 @@ compile_wasm(PG_FUNCTION_ARGS) {
         PG_RETURN_NULL();
     }
 #if WASM_ENABLE_DEBUG_AOT != 0
-    if (!create_dwarf_extractor(comp_data, "app.wasm")) {
+    File file = OpenTemporaryFile(false);
+    int nbytes = FileWrite(file, VARDATA_ANY(wasm), wasm_size, 0, 0);
+    if (nbytes != wasm_size) {
+        if (nbytes < 0)
+            ereport(ERROR,
+                    (errcode_for_file_access(),
+                     errmsg("could not write temporary file: %m")));
+        ereport(
+            ERROR,
+            (errcode(ERRCODE_DISK_FULL),
+             errmsg("could not write temporary file: wrote only %d of %d bytes",
+                    nbytes,
+                    wasm_size)));
+    }
+    if (!create_dwarf_extractor(comp_data, FilePathName(file))) {
         ereport(ERROR,
                 (errmsg("could not create dwarf extractor: %s",
                         aot_get_last_error())));
         PG_RETURN_NULL();
     }
+    FileClose(file);
 #endif
     comp_ctx = aot_create_comp_context(comp_data, &option);
     if (!comp_ctx) {

@@ -15,32 +15,16 @@
 
 ## Development
 
-### Initialization
-
-1. Install system dependencies
+* Install system dependencies
 
     ```
     $ sudo pacman -S llvm lldb
     ```
 
-2. Initialize vendor libraries and PostgreSQL for development:
+* Build extension and run the dev Postgres:
 
     ```
-    $ make dev-pg
-    ```
-
-### Iteration
-
-* Build extension and reload the dev Postgres:
-
-    ```
-    $ make reload DEV=1 -j $(nproc)
-    ```
-
-    You can join this command with tailing the log:
-
-    ```
-    $ make reload DEV=1 -j $(nproc) && tail -f vendor/pg*.log
+    $ make run DEV=1 -j $(nproc)
     ```
 
 * When you changed settings in Makefile, rebuild extension files:
@@ -52,10 +36,10 @@
 * When you need to nuke the environment:
 
     ```
-    $ make clean-vendor
+    $ make nuke
     ```
 
-### Testing
+## Testing
 
 1. Convert WASM binary to octets for step 2:
 

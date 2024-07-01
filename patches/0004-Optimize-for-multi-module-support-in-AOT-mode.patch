@@ -1,0 +1,261 @@
+From 7656f837f62713931ac3c52b194356b10b473214 Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Mon, 1 Jul 2024 15:21:05 +0800
+Subject: [PATCH] Optimize for multi-module support in AOT mode (#3563)
+
+- Split the `aot_loader_resolve_function` into two functions to prevent
+  redundant module lookups and loads
+- Access pre-associated module instances from `import_func_module_insts`,
+  avoiding unnecessary instance lookups and improving performance
+---
+ core/iwasm/aot/aot_loader.c             | 48 ++++++++++++++++++-------
+ core/iwasm/aot/aot_runtime.c            | 42 +++++++++++-----------
+ core/iwasm/aot/aot_runtime.h            |  1 +
+ core/iwasm/common/wasm_runtime_common.c | 26 ++++++++++++++
+ 4 files changed, 82 insertions(+), 35 deletions(-)
+
+diff --git a/core/iwasm/aot/aot_loader.c b/core/iwasm/aot/aot_loader.c
+index 8d705248..7897502b 100644
+--- a/core/iwasm/aot/aot_loader.c
++++ b/core/iwasm/aot/aot_loader.c
+@@ -580,15 +580,17 @@ str2uint64(const char *buf, uint64 *p_res);
+ 
+ #if WASM_ENABLE_MULTI_MODULE != 0
+ static void *
+-aot_loader_resolve_function(const char *module_name, const char *function_name,
++aot_loader_resolve_function(const AOTModule *module, const char *function_name,
+                             const AOTFuncType *expected_function_type,
+-                            char *error_buf, uint32 error_buf_size)
++                            char *error_buf, uint32 error_buf_size);
++
++static void *
++aot_loader_resolve_function_ex(const char *module_name,
++                               const char *function_name,
++                               const AOTFuncType *expected_function_type,
++                               char *error_buf, uint32 error_buf_size)
+ {
+     WASMModuleCommon *module_reg;
+-    void *function = NULL;
+-    AOTExport *export = NULL;
+-    AOTModule *module = NULL;
+-    AOTFuncType *target_function_type = NULL;
+ 
+     module_reg = wasm_runtime_find_module_registered(module_name);
+     if (!module_reg || module_reg->module_type != Wasm_Module_AoT) {
+@@ -597,10 +599,23 @@ aot_loader_resolve_function(const char *module_name, const char *function_name,
+         set_error_buf(error_buf, error_buf_size, "unknown import");
+         return NULL;
+     }
++    return aot_loader_resolve_function((AOTModule *)module_reg, function_name,
++                                       expected_function_type, error_buf,
++                                       error_buf_size);
++}
+ 
+-    module = (AOTModule *)module_reg;
+-    export = loader_find_export(module_reg, module_name, function_name,
+-                                EXPORT_KIND_FUNC, error_buf, error_buf_size);
++static void *
++aot_loader_resolve_function(const AOTModule *module, const char *function_name,
++                            const AOTFuncType *expected_function_type,
++                            char *error_buf, uint32 error_buf_size)
++{
++    void *function = NULL;
++    AOTExport *export = NULL;
++    AOTFuncType *target_function_type = NULL;
++
++    export = loader_find_export((WASMModuleCommon *)module, module->name,
++                                function_name, EXPORT_KIND_FUNC, error_buf,
++                                error_buf_size);
+     if (!export) {
+         return NULL;
+     }
+@@ -622,7 +637,7 @@ aot_loader_resolve_function(const char *module_name, const char *function_name,
+     if (!wasm_type_equal((WASMType *)expected_function_type,
+                          (WASMType *)target_function_type, module->types,
+                          module->type_count)) {
+-        LOG_DEBUG("%s.%s failed the type check", module_name, function_name);
++        LOG_DEBUG("%s.%s failed the type check", module->name, function_name);
+         set_error_buf(error_buf, error_buf_size, "incompatible import type");
+         return NULL;
+     }
+@@ -2229,17 +2244,24 @@ load_import_funcs(const uint8 **p_buf, const uint8 *buf_end, AOTModule *module,
+             &import_funcs[i].signature, &import_funcs[i].attachment,
+             &import_funcs[i].call_conv_raw);
+         if (!linked_func) {
++            sub_module = NULL;
+             if (!wasm_runtime_is_built_in_module(module_name)) {
+                 sub_module = (AOTModule *)wasm_runtime_load_depended_module(
+                     (WASMModuleCommon *)module, module_name, error_buf,
+                     error_buf_size);
+                 if (!sub_module) {
++                    LOG_ERROR("failed to load sub module: %s", error_buf);
+                     return false;
+                 }
+             }
+-            linked_func = aot_loader_resolve_function(
+-                module_name, field_name, declare_func_type, error_buf,
+-                error_buf_size);
++            if (!sub_module)
++                linked_func = aot_loader_resolve_function_ex(
++                    module_name, field_name, declare_func_type, error_buf,
++                    error_buf_size);
++            else
++                linked_func = aot_loader_resolve_function(
++                    sub_module, field_name, declare_func_type, error_buf,
++                    error_buf_size);
+         }
+         import_funcs[i].func_ptr_linked = linked_func;
+         import_funcs[i].func_type = declare_func_type;
+diff --git a/core/iwasm/aot/aot_runtime.c b/core/iwasm/aot/aot_runtime.c
+index 8c82883a..00a97d8c 100644
+--- a/core/iwasm/aot/aot_runtime.c
++++ b/core/iwasm/aot/aot_runtime.c
+@@ -1490,6 +1490,7 @@ aot_instantiate(AOTModule *module, AOTModuleInstance *parent,
+ #if WASM_ENABLE_BULK_MEMORY != 0 || WASM_ENABLE_REF_TYPES != 0
+     WASMModuleInstanceExtraCommon *common;
+ #endif
++    AOTModuleInstanceExtra *extra = NULL;
+     const uint32 module_inst_struct_size =
+         offsetof(AOTModuleInstance, global_table_data.bytes);
+     const uint64 module_inst_mem_inst_size =
+@@ -1543,14 +1544,13 @@ aot_instantiate(AOTModule *module, AOTModuleInstance *parent,
+     module_inst->module = (void *)module;
+     module_inst->e =
+         (WASMModuleInstanceExtra *)((uint8 *)module_inst + extra_info_offset);
++    extra = (AOTModuleInstanceExtra *)module_inst->e;
+ 
+ #if WASM_ENABLE_GC != 0
+     /* Initialize gc heap first since it may be used when initializing
+        globals and others */
+     if (!is_sub_inst) {
+         uint32 gc_heap_size = wasm_runtime_get_gc_heap_size_default();
+-        AOTModuleInstanceExtra *extra =
+-            (AOTModuleInstanceExtra *)module_inst->e;
+ 
+         if (gc_heap_size < GC_HEAP_SIZE_MIN)
+             gc_heap_size = GC_HEAP_SIZE_MIN;
+@@ -1572,6 +1572,16 @@ aot_instantiate(AOTModule *module, AOTModuleInstance *parent,
+ #if WASM_ENABLE_MULTI_MODULE != 0
+     ((AOTModuleInstanceExtra *)module_inst->e)->sub_module_inst_list =
+         &((AOTModuleInstanceExtra *)module_inst->e)->sub_module_inst_list_head;
++
++    /* Allocate memory for import_func_module_insts*/
++    if (module->import_func_count > 0
++        && !(extra->import_func_module_insts =
++                 runtime_malloc((uint64)module->import_func_count
++                                    * sizeof(WASMModuleInstanceCommon *),
++                                error_buf, error_buf_size))) {
++        goto fail;
++    }
++
+     ret = wasm_runtime_sub_module_instantiate(
+         (WASMModuleCommon *)module, (WASMModuleInstanceCommon *)module_inst,
+         stack_size, heap_size, max_memory_pages, error_buf, error_buf_size);
+@@ -1885,8 +1895,8 @@ destroy_c_api_frames(Vector *frames)
+ void
+ aot_deinstantiate(AOTModuleInstance *module_inst, bool is_sub_inst)
+ {
+-    WASMModuleInstanceExtraCommon *common =
+-        &((AOTModuleInstanceExtra *)module_inst->e)->common;
++    AOTModuleInstanceExtra *extra = (AOTModuleInstanceExtra *)module_inst->e;
++    WASMModuleInstanceExtraCommon *common = &extra->common;
+     if (module_inst->exec_env_singleton) {
+         /* wasm_exec_env_destroy will call
+            wasm_cluster_wait_for_all_except_self to wait for other
+@@ -1912,6 +1922,8 @@ aot_deinstantiate(AOTModuleInstance *module_inst, bool is_sub_inst)
+ #if WASM_ENABLE_MULTI_MODULE != 0
+     wasm_runtime_sub_module_deinstantiate(
+         (WASMModuleInstanceCommon *)module_inst);
++    if (extra->import_func_module_insts)
++        wasm_runtime_free(extra->import_func_module_insts);
+ #endif
+ 
+     if (module_inst->tables)
+@@ -2753,10 +2765,6 @@ aot_invoke_native(WASMExecEnv *exec_env, uint32 func_idx, uint32 argc,
+     void *attachment;
+     char buf[96];
+     bool ret = false;
+-#if WASM_ENABLE_MULTI_MODULE != 0
+-    bh_list *sub_module_list_node = NULL;
+-    const char *sub_inst_name = NULL;
+-#endif
+     bh_assert(func_idx < aot_module->import_func_count);
+ 
+     import_func = aot_module->import_funcs + func_idx;
+@@ -2781,20 +2789,10 @@ aot_invoke_native(WASMExecEnv *exec_env, uint32 func_idx, uint32 argc,
+     else if (!import_func->call_conv_raw) {
+         signature = import_func->signature;
+ #if WASM_ENABLE_MULTI_MODULE != 0
+-        sub_module_list_node =
+-            ((AOTModuleInstanceExtra *)module_inst->e)->sub_module_inst_list;
+-        sub_module_list_node = bh_list_first_elem(sub_module_list_node);
+-        while (sub_module_list_node) {
+-            sub_inst_name =
+-                ((AOTSubModInstNode *)sub_module_list_node)->module_name;
+-            if (strcmp(sub_inst_name, import_func->module_name) == 0) {
+-                exec_env = wasm_runtime_get_exec_env_singleton(
+-                    (WASMModuleInstanceCommon *)((AOTSubModInstNode *)
+-                                                     sub_module_list_node)
+-                        ->module_inst);
+-                break;
+-            }
+-            sub_module_list_node = bh_list_elem_next(sub_module_list_node);
++        WASMModuleInstanceCommon *sub_inst = NULL;
++        if ((sub_inst = ((AOTModuleInstanceExtra *)module_inst->e)
++                            ->import_func_module_insts[func_idx])) {
++            exec_env = wasm_runtime_get_exec_env_singleton(sub_inst);
+         }
+         if (exec_env == NULL) {
+             wasm_runtime_set_exception((WASMModuleInstanceCommon *)module_inst,
+diff --git a/core/iwasm/aot/aot_runtime.h b/core/iwasm/aot/aot_runtime.h
+index b46f676a..e468b476 100644
+--- a/core/iwasm/aot/aot_runtime.h
++++ b/core/iwasm/aot/aot_runtime.h
+@@ -111,6 +111,7 @@ typedef struct AOTModuleInstanceExtra {
+ #if WASM_ENABLE_MULTI_MODULE != 0
+     bh_list sub_module_inst_list_head;
+     bh_list *sub_module_inst_list;
++    WASMModuleInstanceCommon **import_func_module_insts;
+ #endif
+ } AOTModuleInstanceExtra;
+ 
+diff --git a/core/iwasm/common/wasm_runtime_common.c b/core/iwasm/common/wasm_runtime_common.c
+index dac7bad7..4e195742 100644
+--- a/core/iwasm/common/wasm_runtime_common.c
++++ b/core/iwasm/common/wasm_runtime_common.c
+@@ -7167,6 +7167,32 @@ wasm_runtime_sub_module_instantiate(WASMModuleCommon *module,
+             (WASMModuleInstance *)sub_module_inst;
+         sub_module_inst_list_node->module_name =
+             sub_module_list_node->module_name;
++
++#if WASM_ENABLE_AOT != 0
++        if (module_inst->module_type == Wasm_Module_AoT) {
++            AOTModuleInstance *aot_module_inst =
++                (AOTModuleInstance *)module_inst;
++            AOTModule *aot_module = (AOTModule *)module;
++            AOTModuleInstanceExtra *aot_extra =
++                (AOTModuleInstanceExtra *)aot_module_inst->e;
++            uint32 i;
++            AOTImportFunc *import_func;
++            for (i = 0; i < aot_module->import_func_count; i++) {
++                if (aot_extra->import_func_module_insts[i])
++                    continue;
++
++                import_func = &aot_module->import_funcs[i];
++                if (strcmp(sub_module_inst_list_node->module_name,
++                           import_func->module_name)
++                    == 0) {
++                    aot_extra->import_func_module_insts[i] =
++                        (WASMModuleInstanceCommon *)
++                            sub_module_inst_list_node->module_inst;
++                }
++            }
++        }
++#endif
++
+         bh_list_status ret =
+             bh_list_insert(sub_module_inst_list, sub_module_inst_list_node);
+         bh_assert(BH_LIST_SUCCESS == ret);
+-- 
+2.45.2
+
