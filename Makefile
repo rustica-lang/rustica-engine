@@ -172,8 +172,8 @@ ifeq ($(DEBUG),1)
 		-I$(WAMR_IWASM_ROOT)/aot/debug \
 		-I$(WAMR_IWASM_ROOT)/compilation/debug
 	SHLIB_LINK += -llldb
-	PG_CFLAGS += -g
-	PG_CPPFLAGS += -g
+	PG_CFLAGS += -g -O0
+	PG_CPPFLAGS += -g -O0
 endif
 
 ifeq ($(GC),1)
@@ -256,7 +256,7 @@ $(DEV_PG_SRC): $(DEV_PG_TARBALL)
 	mkdir -p $(DEV_PG_SRC)
 	tar xvf $(DEV_PG_TARBALL) -C $(DEV_PG_SRC) --strip-components=1
 
-CLEAN_ENV = env -i PATH=$(PATH) HOME=$(HOME) USER=$(USER)
+CLEAN_ENV = env -i PATH=$(PATH) HOME=$(HOME) USER=$(USER) CFLAGS=-O0
 $(DEV_PG_INSTALL): $(DEV_PG_SRC)
 	mkdir -p $(DEV_PG_INSTALL)
 	$(eval DEV_PG_INSTALL_PREFIX := $(shell realpath $(DEV_PG_INSTALL)))
