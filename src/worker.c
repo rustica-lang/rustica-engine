@@ -32,6 +32,11 @@ static SPIPlanPtr load_module_plan = NULL;
 static const char *load_module_sql =
     "SELECT bin_code FROM rustica.modules WHERE name = $1";
 
+typedef struct Context {
+    WaitEventSet *wait_set;
+    pgsocket fd;
+} Context;
+
 void
 spectest_print_char(wasm_exec_env_t exec_env, int c) {
     fwprintf(stderr, L"%lc", c);
@@ -41,15 +46,58 @@ static NativeSymbol spectest[] = {
     { "print_char", spectest_print_char, "(i)" }
 };
 
-int
-env_malloc(wasm_exec_env_t exec_env, int size) {
-    return (int)wasm_runtime_module_malloc(
-        wasm_exec_env_get_module_inst(exec_env),
-        size,
-        NULL);
+static int32_t
+env_recv(wasm_exec_env_t exec_env,
+         WASMArrayObjectRef buf,
+         int32_t start,
+         int32_t len) {
+    WaitEvent events[1];
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    char *view = wasm_array_obj_first_elem_addr(buf);
+    ModifyWaitEvent(ctx->wait_set,
+                    1,
+                    WL_SOCKET_READABLE | WL_SOCKET_CLOSED,
+                    NULL);
+    WaitEventSetWait(ctx->wait_set, -1, events, 1, WAIT_EVENT_CLIENT_READ);
+    if (events[0].events & WL_LATCH_SET) {
+        return -1;
+    }
+    else if (events[0].events & WL_SOCKET_CLOSED) {
+        return 0;
+    }
+    else {
+        return recv(ctx->fd, view + start, len, 0);
+    }
 }
 
-static NativeSymbol native_env[] = { { "malloc", env_malloc, "(i)i" } };
+static int32_t
+env_send(wasm_exec_env_t exec_env,
+         WASMArrayObjectRef buf,
+         int32_t start,
+         int32_t len) {
+    WaitEvent events[1];
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    char *view = wasm_array_obj_first_elem_addr(buf);
+    ModifyWaitEvent(ctx->wait_set,
+                    1,
+                    WL_SOCKET_WRITEABLE | WL_SOCKET_CLOSED,
+                    NULL);
+    WaitEventSetWait(ctx->wait_set, -1, events, 1, WAIT_EVENT_CLIENT_WRITE);
+    if (events[0].events & WL_LATCH_SET) {
+        return -1;
+    }
+    else if (events[0].events & WL_SOCKET_CLOSED) {
+        return 0;
+    }
+    else {
+        return send(ctx->fd, view + start, len, 0);
+    }
+}
+
+static NativeSymbol native_env[] = {
+    { "recv", env_recv, "(rii)i" },
+    { "send", env_send, "(rii)i" },
+};
 
 static bool
 wasm_module_reader_callback(package_type_t module_type,
@@ -163,7 +211,10 @@ startup() {
     if (!wasm_runtime_register_natives("spectest", spectest, 1))
         ereport(FATAL,
                 (errmsg("rustica-%d: could not register natives", worker_id)));
-    if (!wasm_runtime_register_natives("env", native_env, 1))
+    if (!wasm_runtime_register_natives("env",
+                                       native_env,
+                                       sizeof(native_env)
+                                           / sizeof(native_env[0])))
         ereport(FATAL,
                 (errmsg("rustica-%d: could not register natives", worker_id)));
     wasm_runtime_set_module_reader(wasm_module_reader_callback,
@@ -307,6 +358,17 @@ on_readable() {
         goto finally4;
     }
 
+    Context context = { 0 };
+    context.fd = client;
+    wasm_runtime_set_user_data(exec_env, &context);
+    context.wait_set = CreateWaitEventSet(CurrentMemoryContext, 2);
+    AddWaitEventToSet(context.wait_set,
+                      WL_LATCH_SET,
+                      PGINVALID_SOCKET,
+                      MyLatch,
+                      NULL);
+    AddWaitEventToSet(context.wait_set, WL_SOCKET_CLOSED, client, NULL, NULL);
+
     start_func = wasm_runtime_lookup_function(instance, "_start");
     if (!start_func) {
         ereport(WARNING, (errmsg("cannot find WASM entrypoint")));
@@ -315,14 +377,12 @@ on_readable() {
         send(client, resp, strlen(resp), 0);
         goto finally5;
     }
-
-    if (wasm_runtime_call_wasm(exec_env, start_func, 0, NULL))
-        resp = "HTTP/1.0 200 OK\r\nContent-Length: "
-               "3\r\n\r\nOK\n";
-    else
+    if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
         resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-               "32\r\n\r\nFailed to call WASM application\n";
-    send(client, resp, strlen(resp), 0);
+               "32\r\n\r\nFailed to run WASM application\n";
+        send(client, resp, strlen(resp), 0);
+        goto finally5;
+    }
 
 finally5:
     wasm_runtime_destroy_exec_env(exec_env);
