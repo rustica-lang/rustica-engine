@@ -3,12 +3,15 @@
 #include <wchar.h>
 
 #include "postgres.h"
-#include <miscadmin.h>
-#include <postmaster/bgworker.h>
-#include <libpq/libpq.h>
+#include "miscadmin.h"
+#include "postmaster/bgworker.h"
+#include "libpq/libpq.h"
+#include "libpq/pqformat.h"
 #include "access/xact.h"
+#include "commands/async.h"
 #include "executor/spi.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "pgstat.h"
 #include "tcop/utility.h"
@@ -26,6 +29,7 @@ static pgsocket sock;
 static char hello[12];
 static WaitEventSet *wait_set = NULL;
 static bool shutdown_requested = false;
+static bool notify_received = false;
 static char state = WAIT_WRITE;
 static int sent = 0;
 static FDMessage fd_msg;
@@ -384,6 +388,8 @@ startup() {
         StartTransactionCommand();
         SPI_connect();
 
+        Async_Listen("rustica_module_cache_invalidation");
+
         debug_query_string = load_module_sql;
         load_module_plan = SPI_prepare(load_module_sql, 1, (Oid[1]){ TEXTOID });
 
@@ -437,30 +443,6 @@ on_writeable() {
                         WL_SOCKET_READABLE | WL_SOCKET_CLOSED,
                         NULL);
     }
-}
-
-static void
-unload_registered_modules() {
-    bh_list *registered_module_list = wasm_runtime_get_registered_modules();
-    WASMRegisteredModule *module = NULL, *module_next;
-
-    module = bh_list_first_elem(registered_module_list);
-    while (module) {
-        module_next = bh_list_elem_next(module);
-        if (module->module->module_type == Wasm_Module_Bytecode) {
-#if WASM_ENABLE_INTERP != 0
-            wasm_unload((WASMModule *)module->module);
-#endif
-        }
-        else {
-#if WASM_ENABLE_AOT != 0
-            aot_unload((AOTModule *)module->module);
-#endif
-        }
-        module = module_next;
-    }
-    // GOTCHA: NOT FREEING each node here; the memory context should do it
-    bh_list_init(registered_module_list);
 }
 
 static inline void
@@ -555,6 +537,7 @@ on_readable() {
     int ret;
     bool isnull;
     bytea *bin_code;
+    LoadArgs load_args = { 0 };
     char error_buf[128];
     wasm_module_t module;
     wasm_module_inst_t instance;
@@ -584,31 +567,68 @@ on_readable() {
     debug_query_string = load_module_sql;
     pgstat_report_activity(STATE_RUNNING, "loading WASM application");
 
-    name_datum = CStringGetTextDatum("main");
-    ret = SPI_execute_plan(load_module_plan, &name_datum, NULL, true, 1);
-    if (ret != SPI_OK_SELECT || SPI_processed == 0) {
-        resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
-               "23\r\n\r\ncan't find main module\n";
-        send(client, resp, strlen(resp), 0);
-        goto finally2;
-    }
-
-    bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
-                                             SPI_tuptable->tupdesc,
-                                             1,
-                                             &isnull));
-    debug_query_string = NULL;
-
-    module = wasm_runtime_load((uint8 *)VARDATA_ANY(bin_code),
-                               VARSIZE_ANY_EXHDR(bin_code),
-                               error_buf,
-                               sizeof(error_buf));
+    module = wasm_runtime_find_module_registered("main");
     if (!module) {
-        ereport(WARNING, (errmsg("bad WASM bin_code: %s", error_buf)));
-        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-               "13\r\n\r\nBad bin_code\n";
-        send(client, resp, strlen(resp), 0);
-        goto finally2;
+        ereport(DEBUG1,
+                (errmsg("rustica-%d: load module \"main\"", worker_id)));
+        name_datum = CStringGetTextDatum("main");
+        ret = SPI_execute_plan(load_module_plan, &name_datum, NULL, true, 1);
+        if (ret != SPI_OK_SELECT || SPI_processed == 0) {
+            resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
+                   "23\r\n\r\ncan't find main module\n";
+            send(client, resp, strlen(resp), 0);
+            goto finally2;
+        }
+
+        bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
+                                                 SPI_tuptable->tupdesc,
+                                                 1,
+                                                 &isnull));
+        debug_query_string = NULL;
+
+        load_args.name = "";
+        load_args.wasm_binary_freeable = true;
+
+        MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
+        module = wasm_runtime_load_ex((uint8 *)VARDATA_ANY(bin_code),
+                                      VARSIZE_ANY_EXHDR(bin_code),
+                                      &load_args,
+                                      error_buf,
+                                      sizeof(error_buf));
+        if (!module) {
+            MemoryContextSwitchTo(tx_mctx);
+            ereport(WARNING, (errmsg("bad WASM bin_code: %s", error_buf)));
+            resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+                   "13\r\n\r\nBad bin_code\n";
+            send(client, resp, strlen(resp), 0);
+            goto finally2;
+        }
+        // due to the lazy loading of `rtt_types` objects which are allocated
+        // in the module's instantiate phase and released with popping
+        // transactional memory context, potential crashes can occur.
+        // To resolve this issue, we preload all rtt_type objects within the
+        // TopMemoryContext.
+        AOTModule *aot_module = module;
+        for (uint32 i = 0; i < aot_module->type_count; i++) {
+            if (!wasm_rtt_type_new(aot_module->types[i],
+                                   i,
+                                   aot_module->rtt_types,
+                                   aot_module->type_count,
+                                   &aot_module->rtt_type_lock)) {
+                wasm_runtime_unload(module);
+                MemoryContextSwitchTo(tx_mctx);
+                ereport(WARNING, errmsg("create rtt object failed"));
+                resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+                       "28\r\n\r\nFailed to create rtt object\n";
+                send(client, resp, strlen(resp), 0);
+                goto finally2;
+            }
+        }
+        wasm_runtime_register_module("main",
+                                     module,
+                                     error_buf,
+                                     sizeof(error_buf));
+        MemoryContextSwitchTo(tx_mctx);
     }
 
     pgstat_report_activity(STATE_RUNNING, "running WASM application");
@@ -623,7 +643,7 @@ on_readable() {
         resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
                "21\r\n\r\nInstantiation failed\n";
         send(client, resp, strlen(resp), 0);
-        goto finally3;
+        goto finally2;
     }
 
     exec_env = wasm_runtime_create_exec_env(instance, 16384);
@@ -632,7 +652,7 @@ on_readable() {
         resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
                "17\r\n\r\nExecution failed\n";
         send(client, resp, strlen(resp), 0);
-        goto finally4;
+        goto finally3;
     }
 
     Context context = { 0 };
@@ -655,26 +675,21 @@ on_readable() {
         resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
                "21\r\n\r\nBad WASM application\n";
         send(client, resp, strlen(resp), 0);
-        goto finally5;
+        goto finally4;
     }
     if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
         resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
                "32\r\n\r\nFailed to run WASM application\n";
         send(client, resp, strlen(resp), 0);
-        goto finally5;
     }
 
-finally5:
+finally4:
     wasm_runtime_destroy_exec_env(exec_env);
 
-finally4:
+finally3:
     wasm_runtime_deinstantiate(instance);
 
-finally3:
-    wasm_runtime_unload(module);
-
 finally2:
-    unload_registered_modules();
     SPI_finish();
     PopActiveSnapshot();
     CommitTransactionCommand();
@@ -686,6 +701,57 @@ finally1:
     StreamClose(client);
     state = WAIT_WRITE;
     ModifyWaitEvent(wait_set, 1, WL_SOCKET_WRITEABLE | WL_SOCKET_CLOSED, NULL);
+}
+
+static void
+invalidate_cached_module(const char *module_name) {
+    ereport(
+        DEBUG1,
+        (errmsg("rustica-%d: unload module \"%s\"", worker_id, module_name)));
+    wasm_module_t module = wasm_runtime_find_module_registered(module_name);
+    if (module) {
+        // since `wasm_runtime_unload` function does not call `aot_unload` when
+        // multi-modules is enabled, we have to call `aot_unload` directly here
+        aot_unload(module);
+        wasm_runtime_unregister_module(module);
+    }
+}
+
+static int
+mock_comm_putmessage(char msgtype, const char *s, size_t len) {
+    StringInfoData msg = { .data = s,
+                           .len = (int)len,
+                           .maxlen = (int)len,
+                           .cursor = 0 };
+    if (msgtype == 'A') {
+        pq_getmsgint(&msg, 4); // pid
+        char *channel = pq_getmsgstring(&msg);
+        if (strcmp(channel, "rustica_module_cache_invalidation") == 0) {
+            char *payload = pq_getmsgstring(&msg);
+            invalidate_cached_module(payload);
+        }
+    }
+    return 0;
+}
+
+static const PQcommMethods mock_comm_methods = {
+    NULL, NULL, NULL, NULL, mock_comm_putmessage, NULL,
+};
+
+static void
+on_notification_received() {
+    ereport(
+        DEBUG1,
+        (errmsg(
+            "rustica-%d: received notification for module cache invalidation",
+            worker_id)));
+
+    PQcommMethods *old_methods = PqCommMethods;
+    PqCommMethods = &mock_comm_methods;
+    whereToSendOutput = DestRemote;
+    ProcessNotifyInterrupt(false);
+    whereToSendOutput = DestNone;
+    PqCommMethods = old_methods;
 }
 
 static void
@@ -709,6 +775,10 @@ main_loop() {
                 if (shutdown_requested)
                     return;
                 ResetLatch(MyLatch);
+                if (notify_received) {
+                    notify_received = false;
+                    on_notification_received();
+                }
             }
             if (events[i].events & WL_SOCKET_CLOSED) {
                 ereport(DEBUG1,
@@ -737,9 +807,19 @@ on_sigterm(SIGNAL_ARGS) {
     SetLatch(MyLatch);
 }
 
+static void
+on_sigusr1(SIGNAL_ARGS) {
+    procsignal_sigusr1_handler(postgres_signal_arg);
+    if (notifyInterruptPending) {
+        notify_received = true;
+    }
+    SetLatch(MyLatch);
+}
+
 PGDLLEXPORT void
 rustica_worker(Datum index) {
     pqsignal(SIGTERM, on_sigterm);
+    pqsignal(SIGUSR1, on_sigusr1);
     BackgroundWorkerUnblockSignals();
 
     worker_id = DatumGetInt32(index);

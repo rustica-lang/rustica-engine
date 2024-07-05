@@ -238,7 +238,6 @@ $(WAMR_DIR)/.stub: $(WAMR_TARBALL)
 	patch -p1 -d $(WAMR_DIR) < patches/0004-Optimize-for-multi-module-support-in-AOT-mode.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0005-Support-circular-calls-when-multi-module-enabled.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0006-wamrc-allow-building-without-DUMP_CALL_STACK.patch
-	patch -p1 -d $(WAMR_DIR) < patches/0007-HACK-expose-registered_module_list.patch
 	echo > $(WAMR_DIR)/.stub
 
 include $(WAMR_DIR)/.stub
