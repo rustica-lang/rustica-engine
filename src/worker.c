@@ -45,6 +45,7 @@ typedef struct Context {
     llhttp_settings_t http_settings;
     WASMArrayObjectRef current_buf;
     int32_t bytes_view;
+    int32_t bytes;
     wasm_function_inst_t on_message_begin;
     wasm_function_inst_t on_method;
     wasm_function_inst_t on_method_complete;
@@ -59,6 +60,7 @@ typedef struct Context {
     wasm_function_inst_t on_headers_complete;
     wasm_function_inst_t on_body;
     wasm_function_inst_t on_message_complete;
+    wasm_function_inst_t on_error;
 
 } Context;
 
@@ -119,24 +121,113 @@ env_send(wasm_exec_env_t exec_env,
     }
 }
 
+static void
+maybe_call_on_error(wasm_exec_env_t exec_env, llhttp_errno_t rv) {
+    if (rv == HPE_OK || rv == HPE_PAUSED)
+        return;
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    if (!ctx->on_error)
+        return;
+    if (ctx->bytes == -1) {
+        wasm_func_type_t func_type =
+            wasm_runtime_get_function_type(ctx->on_error,
+                                           exec_env->module_inst->module_type);
+        ctx->bytes = wasm_func_type_get_param_type(func_type, 0).heap_type;
+    }
+    char *reason = llhttp_get_error_reason(&ctx->http_parser);
+    uint32_t size = strlen(reason);
+    WASMArrayObjectRef buf =
+        wasm_array_obj_new_with_typeidx(exec_env, ctx->bytes, size, NULL);
+    char *view = wasm_array_obj_first_elem_addr(buf);
+    memcpy(view, reason, size);
+    wasm_val_t args[1] = { { .kind = WASM_EXTERNREF, .of.foreign = buf } };
+    wasm_val_t results[1];
+    if (!wasm_runtime_call_wasm_a(exec_env,
+                                  ctx->on_error,
+                                  1,
+                                  results,
+                                  1,
+                                  args)) {
+        ereport(WARNING, errmsg("failed to run WASM function on_error"));
+    }
+}
+
 static int32_t
-env_parse_http(wasm_exec_env_t exec_env,
-               WASMArrayObjectRef buf,
-               int32_t start,
-               int32_t len) {
+env_llhttp_execute(wasm_exec_env_t exec_env,
+                   WASMArrayObjectRef buf,
+                   int32_t start,
+                   int32_t len) {
     Context *ctx = wasm_runtime_get_user_data(exec_env);
     char *view = wasm_array_obj_first_elem_addr(buf);
     llhttp_errno_t rv;
     ctx->current_buf = buf;
     rv = llhttp_execute(&ctx->http_parser, view + start, len);
     ctx->current_buf = NULL;
+    maybe_call_on_error(exec_env, rv);
     return rv;
+}
+
+static int32_t
+env_llhttp_resume(wasm_exec_env_t exec_env) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    llhttp_resume(&ctx->http_parser);
+    return HPE_OK;
+}
+
+static int32_t
+env_llhttp_finish(wasm_exec_env_t exec_env, WASMArrayObjectRef buf) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    llhttp_errno_t rv;
+    ctx->current_buf = buf;
+    rv = llhttp_finish(&ctx->http_parser);
+    ctx->current_buf = NULL;
+    maybe_call_on_error(exec_env, rv);
+    return rv;
+}
+
+static int32_t
+env_llhttp_reset(wasm_exec_env_t exec_env) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    llhttp_reset(&ctx->http_parser);
+    return HPE_OK;
+}
+
+static int32_t
+env_llhttp_get_error_pos(wasm_exec_env_t exec_env, WASMArrayObjectRef buf) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    char *view = wasm_array_obj_first_elem_addr(buf);
+    return (int32_t)(llhttp_get_error_pos(&ctx->http_parser) - view);
+}
+
+static int32_t
+env_llhttp_get_method(wasm_exec_env_t exec_env) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_get_method(&ctx->http_parser);
+}
+
+static int32_t
+env_llhttp_get_http_major(wasm_exec_env_t exec_env) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_get_http_major(&ctx->http_parser);
+}
+
+static int32_t
+env_llhttp_get_http_minor(wasm_exec_env_t exec_env) {
+    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    return llhttp_get_http_minor(&ctx->http_parser);
 }
 
 static NativeSymbol native_env[] = {
     { "recv", env_recv, "(rii)i" },
     { "send", env_send, "(rii)i" },
-    { "parse_http", env_parse_http, "(rii)i" },
+    { "llhttp_execute", env_llhttp_execute, "(rii)i" },
+    { "llhttp_resume", env_llhttp_resume, "()i" },
+    { "llhttp_finish", env_llhttp_finish, "(r)i" },
+    { "llhttp_reset", env_llhttp_reset, "()i" },
+    { "llhttp_get_error_pos", env_llhttp_get_error_pos, "(r)i" },
+    { "llhttp_get_method", env_llhttp_get_method, "()i" },
+    { "llhttp_get_http_major", env_llhttp_get_http_major, "()i" },
+    { "llhttp_get_http_minor", env_llhttp_get_http_minor, "()i" },
 };
 
 static int
@@ -182,7 +273,6 @@ llhttp_data_cb_impl(wasm_exec_env_t exec_env,
 
 static int
 llhttp_cb_impl(wasm_exec_env_t exec_env, wasm_function_inst_t func) {
-    Context *ctx = wasm_runtime_get_user_data(exec_env);
     wasm_val_t results[1];
     if (!wasm_runtime_call_wasm_a(exec_env, func, 1, results, 0, NULL)) {
         return -1;
@@ -448,9 +538,9 @@ on_writeable() {
 static inline void
 init_llhttp(Context *ctx, wasm_module_inst_t instance) {
     wasm_function_inst_t func;
-    wasm_func_type_t func_type;
 
     llhttp_init(&ctx->http_parser, HTTP_REQUEST, &ctx->http_settings);
+    ctx->bytes = -1;
     ctx->bytes_view = -1;
 
     if ((func = wasm_runtime_lookup_function(instance, "on_message_begin"))) {
@@ -526,6 +616,10 @@ init_llhttp(Context *ctx, wasm_module_inst_t instance) {
              wasm_runtime_lookup_function(instance, "on_message_complete"))) {
         ctx->on_message_complete = func;
         ctx->http_settings.on_message_complete = on_message_complete;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "on_error"))) {
+        ctx->on_error = func;
     }
 }
 
