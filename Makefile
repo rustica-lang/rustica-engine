@@ -100,6 +100,7 @@ OBJS = \
 	src/gucs.o \
 	src/event_set.o \
 	src/worker.o \
+	src/spi.o \
 	src/master.o
 
 WAMR_DEFINES = \
@@ -198,6 +199,7 @@ ifeq ($(GC),1)
 endif
 
 PG_CFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES) \
+	-Wno-vla \
 	-Wno-incompatible-pointer-types \
 	-Wno-int-conversion \
 	-Wno-declaration-after-statement \

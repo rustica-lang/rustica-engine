@@ -37,33 +37,6 @@ static SPIPlanPtr load_module_plan = NULL;
 static const char *load_module_sql =
     "SELECT bin_code FROM rustica.modules WHERE name = $1";
 
-typedef struct Context {
-    WaitEventSet *wait_set;
-    pgsocket fd;
-
-    llhttp_t http_parser;
-    llhttp_settings_t http_settings;
-    WASMArrayObjectRef current_buf;
-    int32_t bytes_view;
-    int32_t bytes;
-    wasm_function_inst_t on_message_begin;
-    wasm_function_inst_t on_method;
-    wasm_function_inst_t on_method_complete;
-    wasm_function_inst_t on_url;
-    wasm_function_inst_t on_url_complete;
-    wasm_function_inst_t on_version;
-    wasm_function_inst_t on_version_complete;
-    wasm_function_inst_t on_header_field;
-    wasm_function_inst_t on_header_field_complete;
-    wasm_function_inst_t on_header_value;
-    wasm_function_inst_t on_header_value_complete;
-    wasm_function_inst_t on_headers_complete;
-    wasm_function_inst_t on_body;
-    wasm_function_inst_t on_message_complete;
-    wasm_function_inst_t on_error;
-
-} Context;
-
 void
 spectest_print_char(wasm_exec_env_t exec_env, int c) {
     fwprintf(stderr, L"%lc", c);
@@ -228,6 +201,9 @@ static NativeSymbol native_env[] = {
     { "llhttp_get_method", env_llhttp_get_method, "()i" },
     { "llhttp_get_http_major", env_llhttp_get_http_major, "()i" },
     { "llhttp_get_http_minor", env_llhttp_get_http_minor, "()i" },
+    { "prepare_statement", env_prepare_statement, "(rr)i" },
+    { "execute_statement", env_execute_statement, "(i)i" },
+    { "detoast", env_detoast, "(iii)r" },
 };
 
 static int
@@ -624,6 +600,24 @@ init_llhttp(Context *ctx, wasm_module_inst_t instance) {
 }
 
 static inline void
+init_pg(Context *ctx, wasm_module_inst_t instance) {
+    wasm_function_inst_t func;
+
+    if ((func = wasm_runtime_lookup_function(instance, "get_queries"))) {
+        ctx->get_queries = func;
+    }
+
+    if ((func = wasm_runtime_lookup_function(instance, "as_raw_datum"))) {
+        ctx->as_raw_datum = func;
+
+        wasm_func_type_t func_type =
+            wasm_runtime_get_function_type(func, instance->module_type);
+        ctx->as_datum = wasm_func_type_get_param_type(func_type, 0).heap_type;
+        ctx->raw_datum = wasm_func_type_get_result_type(func_type, 0).heap_type;
+    }
+}
+
+static inline void
 on_readable() {
     pgsocket client;
     char *resp;
@@ -662,7 +656,7 @@ on_readable() {
     pgstat_report_activity(STATE_RUNNING, "loading WASM application");
 
     module = wasm_runtime_find_module_registered("main");
-    if (!module) {
+    if (module == NULL) {
         ereport(DEBUG1,
                 (errmsg("rustica-%d: load module \"main\"", worker_id)));
         name_datum = CStringGetTextDatum("main");
@@ -728,8 +722,8 @@ on_readable() {
     pgstat_report_activity(STATE_RUNNING, "running WASM application");
 
     instance = wasm_runtime_instantiate(module,
-                                        16384,
-                                        512 * 1024,
+                                        64 * 1024,
+                                        1024 * 1024,
                                         error_buf,
                                         sizeof(error_buf));
     if (!instance) {
@@ -740,7 +734,7 @@ on_readable() {
         goto finally2;
     }
 
-    exec_env = wasm_runtime_create_exec_env(instance, 16384);
+    exec_env = wasm_runtime_create_exec_env(instance, 64 * 1024);
     if (!exec_env) {
         ereport(WARNING, (errmsg("failed to instantiate WASM application")));
         resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
@@ -763,7 +757,27 @@ on_readable() {
     init_llhttp(&context, instance);
     context.http_parser.data = exec_env;
 
+    init_pg(&context, instance);
+
     start_func = wasm_runtime_lookup_function(instance, "_start");
+    if (start_func) {
+        if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
+            ereport(WARNING, errmsg("failed to run _start"));
+        }
+    }
+
+    start_func = wasm_runtime_lookup_function(instance, "init_modules");
+    if (start_func) {
+        wasm_val_t rv;
+        if (!wasm_runtime_call_wasm_a(exec_env, start_func, 1, &rv, 0, NULL)) {
+            ereport(WARNING, errmsg("failed to run init_modules"));
+        }
+        if (rv.of.i32 == -1) {
+            free_app_plans();
+        }
+    }
+
+    start_func = wasm_runtime_lookup_function(instance, "run");
     if (!start_func) {
         ereport(WARNING, (errmsg("cannot find WASM entrypoint")));
         resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
@@ -790,6 +804,7 @@ finally2:
     debug_query_string = NULL;
     pgstat_report_stat(true);
     pgstat_report_activity(STATE_IDLE, NULL);
+    tuptables_size = 0;
 
 finally1:
     StreamClose(client);
@@ -809,6 +824,8 @@ invalidate_cached_module(const char *module_name) {
         aot_unload(module);
         wasm_runtime_unregister_module(module);
     }
+    if (strcmp(module_name, "main") == 0)
+        free_app_plans();
 }
 
 static int
