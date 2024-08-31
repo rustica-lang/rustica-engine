@@ -2,6 +2,7 @@
 DEV = 0
 DEBUG = 0
 GC = 1
+BUNDLE_LLVM = 0
 VENDOR_DIR = vendor
 WAMR_VERSION = 2.1.2
 LLHTTP_VERSION = 9.2.1
@@ -24,6 +25,10 @@ DEV_PG_SRC = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)
 DEV_PG_INSTALL = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)-install
 DEV_PG_DATA = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION)-data
 DEV_PG_LOG = $(VENDOR_DIR)/pg-$(DEV_PG_VERSION).log
+endif
+
+ifeq ($(BUNDLE_LLVM),1)
+LLVM_BUILD_DIR = $(WAMR_CORE_ROOT)/deps/llvm/build
 endif
 
 # PGXS config begin
@@ -131,7 +136,7 @@ WAMR_DEFINES = \
 	-DWASM_DISABLE_HW_BOUND_CHECK=0 \
 	-DWASM_DISABLE_STACK_HW_BOUND_CHECK=0 \
 	-DWASM_DISABLE_WAKEUP_BLOCKING_OP=1 \
-	-DWASM_DISABLE_WRITE_GS_BASE=0 \
+	-DWASM_DISABLE_WRITE_GS_BASE=1 \
 	-DWASM_ENABLE_LOAD_CUSTOM_SECTION=1 \
 	-DWASM_ENABLE_CUSTOM_NAME_SECTION=1 \
 	-DWASM_ENABLE_GLOBAL_HEAP_POOL=0 \
@@ -199,6 +204,17 @@ ifeq ($(GC),1)
 		-I$(WAMR_IWASM_ROOT)/common/gc
 endif
 
+ifeq ($(BUNDLE_LLVM),1)
+	ALL_INCLUDES += \
+		-I$(LLVM_BUILD_DIR)/include
+	SHLIB_LINK += \
+		-Wl,--whole-archive \
+		$(LLVM_BUILD_DIR)/lib/*.a \
+		-Wl,--no-whole-archive
+else
+	SHLIB_LINK += -lLLVM
+endif
+
 PG_CFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES) \
 	-Wno-vla \
 	-Wno-incompatible-pointer-types \
@@ -207,9 +223,9 @@ PG_CFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES) \
 	-Wno-missing-prototypes \
 	-Wno-implicit-function-declaration
 
-PG_CPPFLAGS += $(WAMR_DEFINES) $(ALL_INCLUDES)
+PG_CPPFLAGS += $(WAMR_DEFINES) $(ALL_INCLUDES) -fno-rtti
 
-SHLIB_LINK += -lLLVM -lstdc++ \
+SHLIB_LINK += -lstdc++ \
 	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
 
 EXTENSION = rustica-wamr
@@ -239,6 +255,9 @@ $(WAMR_DIR)/.stub: $(WAMR_TARBALL)
 	patch -p1 -d $(WAMR_DIR) < patches/0002-wamrc-allow-building-without-DUMP_CALL_STACK.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0003-fix-parameter-handling-in-wasm_loader-with-GC-enable.patch
 	echo > $(WAMR_DIR)/.stub
+ifeq ($(BUNDLE_LLVM),1)
+	cd $(WAMR_DIR)/wamr-compiler && python3 -m pip install -r ../build-scripts/requirements.txt && python3 ../build-scripts/build_llvm.py
+endif
 
 include $(WAMR_DIR)/.stub
 
