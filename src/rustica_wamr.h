@@ -4,7 +4,9 @@
 #include <sys/socket.h>
 
 #include "postgres.h"
+#include "executor/spi.h"
 #include "llhttp.h"
+#include "wasm_runtime_common.h"
 #include <storage/latch.h>
 
 #define BACKEND_HELLO "RUSTICA!"

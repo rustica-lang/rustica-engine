@@ -1,7 +1,7 @@
-From 8e6f895073f412101c0eb44d430da9980b020cd0 Mon Sep 17 00:00:00 2001
+From 6470f066e5298f1f23ea2be941e9262c87023cec Mon Sep 17 00:00:00 2001
 From: Xenia Lu <xenia.lyy@gmail.com>
-Date: Mon, 1 Jul 2024 15:22:12 +0800
-Subject: [PATCH] Support circular calls when multi-module enabled
+Date: Thu, 29 Aug 2024 12:21:45 +0800
+Subject: [PATCH 1/3] Support circular calls when multi-module enabled
 
 - implemented `aot_link_parent_calls` to link import functions in
 circular calls
@@ -21,10 +21,10 @@ circular calls
  8 files changed, 135 insertions(+), 22 deletions(-)
 
 diff --git a/core/iwasm/aot/aot_loader.c b/core/iwasm/aot/aot_loader.c
-index 7897502b..d77e80b6 100644
+index 645f68b1..0949d2b8 100644
 --- a/core/iwasm/aot/aot_loader.c
 +++ b/core/iwasm/aot/aot_loader.c
-@@ -643,6 +643,47 @@ aot_loader_resolve_function(const AOTModule *module, const char *function_name,
+@@ -654,6 +654,47 @@ aot_loader_resolve_function(const AOTModule *module, const char *function_name,
      }
      return function;
  }
@@ -72,7 +72,7 @@ index 7897502b..d77e80b6 100644
  #endif /* end of WASM_ENABLE_MULTI_MODULE */
  
  static bool
-@@ -2246,22 +2287,27 @@ load_import_funcs(const uint8 **p_buf, const uint8 *buf_end, AOTModule *module,
+@@ -2284,22 +2325,27 @@ load_import_funcs(const uint8 **p_buf, const uint8 *buf_end, AOTModule *module,
          if (!linked_func) {
              sub_module = NULL;
              if (!wasm_runtime_is_built_in_module(module_name)) {
@@ -111,7 +111,7 @@ index 7897502b..d77e80b6 100644
          import_funcs[i].func_ptr_linked = linked_func;
          import_funcs[i].func_type = declare_func_type;
 diff --git a/core/iwasm/aot/aot_runtime.c b/core/iwasm/aot/aot_runtime.c
-index 00a97d8c..595d6d03 100644
+index 7e8799e0..c595b60c 100644
 --- a/core/iwasm/aot/aot_runtime.c
 +++ b/core/iwasm/aot/aot_runtime.c
 @@ -1169,12 +1169,17 @@ init_func_ptrs(AOTModuleInstance *module_inst, AOTModule *module,
@@ -133,10 +133,10 @@ index 00a97d8c..595d6d03 100644
  
      /* Set defined function pointers */
 diff --git a/core/iwasm/aot/aot_runtime.h b/core/iwasm/aot/aot_runtime.h
-index e468b476..6d006a88 100644
+index e3704f82..68ea5548 100644
 --- a/core/iwasm/aot/aot_runtime.h
 +++ b/core/iwasm/aot/aot_runtime.h
-@@ -322,6 +322,10 @@ typedef struct AOTModule {
+@@ -323,6 +323,10 @@ typedef struct AOTModule {
  
  #if WASM_ENABLE_MULTI_MODULE != 0
  #define AOTSubModInstNode WASMSubModInstNode
@@ -148,10 +148,10 @@ index e468b476..6d006a88 100644
  
  /* Target info, read from ELF header of object file */
 diff --git a/core/iwasm/common/wasm_runtime_common.c b/core/iwasm/common/wasm_runtime_common.c
-index 4e195742..89ab1d19 100644
+index f54ac4ab..bd6e1387 100644
 --- a/core/iwasm/common/wasm_runtime_common.c
 +++ b/core/iwasm/common/wasm_runtime_common.c
-@@ -7125,7 +7125,9 @@ wasm_runtime_sub_module_instantiate(WASMModuleCommon *module,
+@@ -7410,7 +7410,9 @@ wasm_runtime_sub_module_instantiate(WASMModuleCommon *module,
      WASMRegisteredModule *sub_module_list_node = NULL;
  
  #if WASM_ENABLE_AOT != 0
@@ -161,7 +161,7 @@ index 4e195742..89ab1d19 100644
          sub_module_inst_list =
              ((AOTModuleInstanceExtra *)((AOTModuleInstance *)module_inst)->e)
                  ->sub_module_inst_list;
-@@ -7154,6 +7156,12 @@ wasm_runtime_sub_module_instantiate(WASMModuleCommon *module,
+@@ -7439,6 +7441,12 @@ wasm_runtime_sub_module_instantiate(WASMModuleCommon *module,
                        sub_module_list_node->module_name);
              return false;
          }

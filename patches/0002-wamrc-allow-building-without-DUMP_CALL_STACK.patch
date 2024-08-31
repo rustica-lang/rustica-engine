@@ -1,17 +1,17 @@
-From 204c0bfba4536125001a050237cb893ba36a5b0c Mon Sep 17 00:00:00 2001
+From 0ce10775fec5d471a95e38487e7ecd77ceaacfc6 Mon Sep 17 00:00:00 2001
 From: Xenia Lu <xenia.lyy@gmail.com>
-Date: Mon, 1 Jul 2024 15:23:29 +0800
-Subject: [PATCH] wamrc: allow building without DUMP_CALL_STACK
+Date: Thu, 29 Aug 2024 12:24:04 +0800
+Subject: [PATCH 2/3] wamrc: allow building without DUMP_CALL_STACK
 
 ---
  core/iwasm/interpreter/wasm.h | 5 +++--
  1 file changed, 3 insertions(+), 2 deletions(-)
 
 diff --git a/core/iwasm/interpreter/wasm.h b/core/iwasm/interpreter/wasm.h
-index 4bd65052..d851b3a7 100644
+index ea93adb0..03519c18 100644
 --- a/core/iwasm/interpreter/wasm.h
 +++ b/core/iwasm/interpreter/wasm.h
-@@ -964,8 +964,9 @@ struct WASMModule {
+@@ -968,8 +968,9 @@ struct WASMModule {
      uint64 buf_code_size;
  #endif
  

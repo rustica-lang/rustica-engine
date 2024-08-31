@@ -1,17 +1,17 @@
-From a4356405e10ca49d50adfbe2b18bdb27764e2596 Mon Sep 17 00:00:00 2001
-From: Fantix King <fantix.king@gmail.com>
-Date: Sun, 7 Jul 2024 15:49:53 -0400
-Subject: [PATCH 1/1] further fixes over #3586
+From f7927a107c166dc2e80bda1490af9f4f912b8a72 Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Thu, 29 Aug 2024 12:44:27 +0800
+Subject: [PATCH 3/3] fix parameter handling in wasm_loader with GC enabled
 
 ---
  core/iwasm/interpreter/wasm_loader.c | 18 ++++++++++++++++--
  1 file changed, 16 insertions(+), 2 deletions(-)
 
 diff --git a/core/iwasm/interpreter/wasm_loader.c b/core/iwasm/interpreter/wasm_loader.c
-index 843a2e46..040d3427 100644
+index 0891598d..f62103a4 100644
 --- a/core/iwasm/interpreter/wasm_loader.c
 +++ b/core/iwasm/interpreter/wasm_loader.c
-@@ -11153,6 +11153,9 @@ re_scan:
+@@ -11093,6 +11093,9 @@ re_scan:
                  if (BLOCK_HAS_PARAM(block_type)) {
                      WASMFuncType *wasm_type = block_type.u.type;
  
@@ -21,7 +21,7 @@ index 843a2e46..040d3427 100644
                      BranchBlock *cur_block = loader_ctx->frame_csp - 1;
  #if WASM_ENABLE_FAST_INTERP != 0
                      uint32 cell_num;
-@@ -11160,6 +11163,7 @@ re_scan:
+@@ -11100,6 +11103,7 @@ re_scan:
  #endif
                      for (i = 0; i < block_type.u.type->param_count; i++) {
  
@@ -29,7 +29,7 @@ index 843a2e46..040d3427 100644
                          int32 available_stack_cell =
                              (int32)(loader_ctx->stack_cell_num
                                      - cur_block->stack_cell_num);
-@@ -11171,13 +11175,23 @@ re_scan:
+@@ -11111,13 +11115,23 @@ re_scan:
                              break;
                          }
  

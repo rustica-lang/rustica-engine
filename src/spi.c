@@ -567,7 +567,6 @@ env_prepare_statement(wasm_exec_env_t exec_env,
                             wasm_valtype)));
                 goto fail;
             case INT4OID:
-                WASMStructType *datum_struct_type;
                 if (wasm_valtype == VALUE_TYPE_I32) {
                     pg_to_wasm_funcs[i] = pg_i32_to_wasm_i32;
                     break;
@@ -715,10 +714,10 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     // $@moonbitlang/core/builtin.Array<T> - struct
     wasm_ref_type_t rows_struct_ref_type =
         wasm_struct_type_get_field_type(tuptable_struct_type, 1, false);
-    Assert(rows_ref_type->type_flag == WASM_TYPE_STRUCT);
     WASMStructType *rows_struct_type =
         (WASMStructType *)wasm_get_defined_type(module,
                                                 rows_struct_ref_type.heap_type);
+    Assert(rows_struct_type->base_type.type_flag == WASM_TYPE_STRUCT);
 
     WASMStructObjectRef rows_struct_ref =
         wasm_struct_obj_new_with_typeidx(exec_env,
@@ -730,9 +729,9 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     // $FixedArray<UnsafeMaybeUninit<T>>
     wasm_ref_type_t rows_ref_type =
         wasm_struct_type_get_field_type(rows_struct_type, 0, false);
-    Assert(rows_ref_type->type_flag == WASM_TYPE_ARRAY);
     WASMArrayType *rows_type =
         (WASMArrayType *)wasm_get_defined_type(module, rows_ref_type.heap_type);
+    Assert(rows_type->base_type.type_flag == WASM_TYPE_ARRAY);
 
     WASMArrayObjectRef rows_ref =
         wasm_array_obj_new_with_typeidx(exec_env,

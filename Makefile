@@ -3,7 +3,7 @@ DEV = 0
 DEBUG = 0
 GC = 1
 VENDOR_DIR = vendor
-WAMR_VERSION = 2.1.0
+WAMR_VERSION = 2.1.2
 LLHTTP_VERSION = 9.2.1
 MODULE_big = rustica-wamr
 
@@ -41,6 +41,7 @@ OBJS = \
 	$(WAMR_SHARED_ROOT)/utils/bh_bitmap.o \
 	$(WAMR_SHARED_ROOT)/utils/bh_common.o \
 	$(WAMR_SHARED_ROOT)/utils/bh_hashmap.o \
+	$(WAMR_SHARED_ROOT)/utils/bh_leb128.o \
 	$(WAMR_SHARED_ROOT)/utils/bh_list.o \
 	$(WAMR_SHARED_ROOT)/utils/bh_log.o \
 	$(WAMR_SHARED_ROOT)/utils/bh_queue.o \
@@ -234,14 +235,9 @@ $(WAMR_TARBALL):
 $(WAMR_DIR)/.stub: $(WAMR_TARBALL)
 	mkdir -p $(WAMR_DIR)
 	tar xvf $(WAMR_TARBALL) -C $(WAMR_DIR) --strip-components=1
-	patch -p1 -d $(WAMR_DIR) < patches/0001-Expose-more-functions-related-to-emitting-AOT-files.patch
-	patch -p1 -d $(WAMR_DIR) < patches/0002-Fix-missing-stack-frame-alloc-free-in-AOT-multi-modu.patch
-	patch -p1 -d $(WAMR_DIR) < patches/0003-Allow-missing-imports-in-wasm-loader-and-report-erro.patch
-	patch -p1 -d $(WAMR_DIR) < patches/0004-Optimize-for-multi-module-support-in-AOT-mode.patch
-	patch -p1 -d $(WAMR_DIR) < patches/0005-Support-circular-calls-when-multi-module-enabled.patch
-	patch -p1 -d $(WAMR_DIR) < patches/0006-wamrc-allow-building-without-DUMP_CALL_STACK.patch
-	patch -p1 -d $(WAMR_DIR) < patches/0007-wasm-loader-Fix-several-issues-in-GC-and-exception-h.patch
-	patch -p1 -d $(WAMR_DIR) < patches/0008-further-fixes-over-3586.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0001-Support-circular-calls-when-multi-module-enabled.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0002-wamrc-allow-building-without-DUMP_CALL_STACK.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0003-fix-parameter-handling-in-wasm_loader-with-GC-enable.patch
 	echo > $(WAMR_DIR)/.stub
 
 include $(WAMR_DIR)/.stub
