@@ -102,7 +102,7 @@ OBJS = \
     $(LLHTTP_SRC)/src/api.o \
     $(LLHTTP_SRC)/src/http.o \
     $(LLHTTP_SRC)/src/llhttp.o \
-	src/module.o \
+	src/main.o \
 	src/gucs.o \
 	src/event_set.o \
 	src/worker.o \
