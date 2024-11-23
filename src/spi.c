@@ -220,7 +220,7 @@ wasm_as_datum_to_pg_value(wasm_exec_env_t exec_env, const wasm_value_t value) {
     Context *ctx = wasm_runtime_get_user_data(exec_env);
 
     wasm_val_t args[1] = { { .kind = WASM_EXTERNREF,
-                             .of.foreign = value.gc_obj } };
+                             .of.foreign = (uintptr_t)value.gc_obj } };
     wasm_val_t results[1];
     wasm_runtime_call_wasm_a(exec_env, ctx->as_raw_datum, 1, results, 1, args);
 
@@ -286,7 +286,7 @@ pg_text_to_wasm_bytes(Datum value,
         wasm_array_obj_new_with_typeidx(exec_env, type_idx, size, NULL);
     char *data_ptr = wasm_array_obj_first_elem_addr(array_obj);
     text_to_cstring_buffer(text_ptr, data_ptr, size);
-    wasm_value.gc_obj = array_obj;
+    wasm_value.gc_obj = (wasm_obj_t)array_obj;
     return wasm_value;
 }
 
@@ -304,7 +304,7 @@ pg_timestamp_to_wasm_bytes(Datum value,
         wasm_array_obj_new_with_typeidx(exec_env, type_idx, size, NULL);
     char *data_ptr = wasm_array_obj_first_elem_addr(array_obj);
     memcpy(data_ptr, data, size);
-    wasm_value.gc_obj = array_obj;
+    wasm_value.gc_obj = (wasm_obj_t)array_obj;
     return wasm_value;
 }
 
@@ -320,20 +320,20 @@ pg_value_to_wasm_as_datum(Datum value,
         wasm_struct_obj_new_with_typeidx(exec_env, type_idx);
 
     wasm_value_t field_val;
-    field_val.gc_obj = tuptable;
+    field_val.gc_obj = (wasm_obj_t)tuptable;
     wasm_struct_obj_set_field(datum_obj, 0, &field_val);
     field_val.i32 = row;
     wasm_struct_obj_set_field(datum_obj, 1, &field_val);
     field_val.i32 = col;
     wasm_struct_obj_set_field(datum_obj, 2, &field_val);
 
-    wasm_value.gc_obj = datum_obj;
+    wasm_value.gc_obj = (wasm_obj_t)datum_obj;
     return wasm_value;
 }
 
 static void
-tuple_table_finalizer(void *obj, void *data) {
-    uint32 idx = (uint32)data;
+tuple_table_finalizer(const wasm_obj_t obj, void *data) {
+    uint32 idx = (uint32)(uintptr_t)data;
     SPI_freetuptable(tuptables[idx]);
     tuptables[idx] = NULL;
 }
@@ -707,13 +707,13 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     WASMStructObjectRef tuptable_struct_ref =
         wasm_struct_obj_new_with_type(exec_env, tuptable_struct_type);
     wasm_value_t query_ret_value;
-    query_ret_value.gc_obj = tuptable_struct_ref;
+    query_ret_value.gc_obj = (wasm_obj_t)tuptable_struct_ref;
     wasm_struct_obj_set_field(query.data, 1, &query_ret_value);
 
     wasm_obj_set_gc_finalizer(exec_env,
                               (wasm_obj_t)tuptable_struct_ref,
                               tuple_table_finalizer,
-                              (void *)tuptable_idx);
+                              (void *)(uintptr_t)tuptable_idx);
 
     WASMModuleCommon *module = wasm_exec_env_get_module(exec_env);
 
@@ -802,12 +802,12 @@ env_detoast(wasm_exec_env_t exec_env,
             int32_t row,
             int32_t col) {
     Datum pg_value = get_tuple_table_value(tuptable_idx, row, col);
-    pg_value = PG_DETOAST_DATUM_PACKED(pg_value);
-    uint32_t size = VARSIZE_ANY(pg_value);
+    struct varlena *pg_var = PG_DETOAST_DATUM_PACKED(pg_value);
+    uint32_t size = VARSIZE_ANY(pg_var);
     // TODO: Replace 2 with the type index for the bytes type
     WASMArrayObjectRef buf =
         wasm_array_obj_new_with_typeidx(exec_env, 2, size, NULL);
     char *view = wasm_array_obj_first_elem_addr(buf);
-    memcpy(view, pg_value, size);
+    memcpy(view, pg_var, size);
     return buf;
 }

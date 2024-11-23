@@ -120,13 +120,14 @@ maybe_call_on_error(wasm_exec_env_t exec_env, llhttp_errno_t rv) {
                                            exec_env->module_inst->module_type);
         ctx->bytes = wasm_func_type_get_param_type(func_type, 0).heap_type;
     }
-    char *reason = llhttp_get_error_reason(&ctx->http_parser);
+    const char *reason = llhttp_get_error_reason(&ctx->http_parser);
     uint32_t size = strlen(reason);
     WASMArrayObjectRef buf =
         wasm_array_obj_new_with_typeidx(exec_env, ctx->bytes, size, NULL);
     char *view = wasm_array_obj_first_elem_addr(buf);
     memcpy(view, reason, size);
-    wasm_val_t args[1] = { { .kind = WASM_EXTERNREF, .of.foreign = buf } };
+    wasm_val_t args[1] = { { .kind = WASM_EXTERNREF,
+                             .of.foreign = (uintptr_t)buf } };
     wasm_val_t results[1];
     if (!wasm_runtime_call_wasm_a(exec_env,
                                   ctx->on_error,
@@ -234,7 +235,7 @@ llhttp_data_cb_impl(wasm_exec_env_t exec_env,
     WASMStructObjectRef view =
         wasm_struct_obj_new_with_typeidx(exec_env, ctx->bytes_view);
     wasm_value_t buf_ref, start, len;
-    buf_ref.gc_obj = ctx->current_buf;
+    buf_ref.gc_obj = (wasm_obj_t)ctx->current_buf;
     start.i32 =
         (int32_t)(at
                   - (char *)wasm_array_obj_first_elem_addr(ctx->current_buf));
@@ -244,7 +245,7 @@ llhttp_data_cb_impl(wasm_exec_env_t exec_env,
     wasm_struct_obj_set_field(view, 2, &len);
     wasm_val_t results[1];
     wasm_val_t args[1] = {
-        { .kind = WASM_EXTERNREF, .of.foreign = view },
+        { .kind = WASM_EXTERNREF, .of.foreign = (uintptr_t)view },
     };
     if (!wasm_runtime_call_wasm_a(exec_env, func, 1, results, 1, args)) {
         return -1;
@@ -709,7 +710,7 @@ on_readable() {
         // transactional memory context, potential crashes can occur.
         // To resolve this issue, we preload all rtt_type objects within the
         // TopMemoryContext.
-        AOTModule *aot_module = module;
+        AOTModule *aot_module = (AOTModule *)module;
         for (uint32 i = 0; i < aot_module->type_count; i++) {
             if (!wasm_rtt_type_new(aot_module->types[i],
                                    i,
@@ -834,7 +835,7 @@ invalidate_cached_module(const char *module_name) {
     if (module) {
         // since `wasm_runtime_unload` function does not call `aot_unload` when
         // multi-modules is enabled, we have to call `aot_unload` directly here
-        aot_unload(module);
+        aot_unload((AOTModule *)module);
         wasm_runtime_unregister_module(module);
     }
     if (strcmp(module_name, "main") == 0)
@@ -843,15 +844,15 @@ invalidate_cached_module(const char *module_name) {
 
 static int
 mock_comm_putmessage(char msgtype, const char *s, size_t len) {
-    StringInfoData msg = { .data = s,
+    StringInfoData msg = { .data = (char *)s,
                            .len = (int)len,
                            .maxlen = (int)len,
                            .cursor = 0 };
     if (msgtype == 'A') {
         pq_getmsgint(&msg, 4); // pid
-        char *channel = pq_getmsgstring(&msg);
+        const char *channel = pq_getmsgstring(&msg);
         if (strcmp(channel, "rustica_module_cache_invalidation") == 0) {
-            char *payload = pq_getmsgstring(&msg);
+            const char *payload = pq_getmsgstring(&msg);
             invalidate_cached_module(payload);
         }
     }
@@ -870,7 +871,7 @@ on_notification_received() {
             "rustica-%d: received notification for module cache invalidation",
             worker_id)));
 
-    PQcommMethods *old_methods = PqCommMethods;
+    const PQcommMethods *old_methods = PqCommMethods;
     PqCommMethods = &mock_comm_methods;
     whereToSendOutput = DestRemote;
     ProcessNotifyInterrupt(false);

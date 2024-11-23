@@ -187,7 +187,7 @@ ifeq ($(DEBUG),1)
 		-I$(WAMR_IWASM_ROOT)/compilation/debug
 	SHLIB_LINK += -llldb
 	PG_CFLAGS += -g -O0
-	PG_CPPFLAGS += -g -O0
+	PG_CXXFLAGS += -g -O0
 endif
 
 ifeq ($(GC),1)
@@ -215,7 +215,7 @@ else
 	SHLIB_LINK += -lLLVM
 endif
 
-PG_CFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES) \
+PG_CFLAGS += \
 	-Wno-vla \
 	-Wno-incompatible-pointer-types \
 	-Wno-int-conversion \
@@ -223,7 +223,8 @@ PG_CFLAGS += $(WAMR_DEFINES) $(WAMR_INCLUDES) \
 	-Wno-missing-prototypes \
 	-Wno-implicit-function-declaration
 
-PG_CPPFLAGS += $(WAMR_DEFINES) $(ALL_INCLUDES) -fno-rtti
+PG_CPPFLAGS += $(WAMR_DEFINES) $(ALL_INCLUDES)
+PG_CXXFLAGS += -fno-rtti
 
 SHLIB_LINK += -lstdc++ \
 	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o

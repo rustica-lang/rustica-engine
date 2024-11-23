@@ -171,7 +171,7 @@ startup() {
     fd_msg.cmsg->cmsg_type = SCM_RIGHTS;
     fd_msg.cmsg->cmsg_len = CMSG_LEN(sizeof(int));
 
-    num_listen_sockets = listen_frontend(&listen_sockets);
+    num_listen_sockets = listen_frontend(listen_sockets);
     ipc_sock = listen_backend();
     total_sockets = 1 + num_listen_sockets + max_worker_processes;
 
@@ -180,7 +180,7 @@ startup() {
     rm_wait_set = CreateWaitEventSetEx(CurrentMemoryContext, total_sockets);
     idle_workers = (int *)MemoryContextAllocZero(CurrentMemoryContext,
                                                  sizeof(int) * total_sockets);
-    worker_handles = (BackgroundWorkerHandle *)MemoryContextAllocZero(
+    worker_handles = (BackgroundWorkerHandle **)MemoryContextAllocZero(
         CurrentMemoryContext,
         sizeof(BackgroundWorkerHandle *) * max_worker_processes);
 
