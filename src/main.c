@@ -24,6 +24,7 @@
 #include "aot_export.h"
 
 #include "compiler.h"
+#include "gucs.h"
 #include "rustica_wamr.h"
 
 PG_MODULE_MAGIC;

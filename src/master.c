@@ -24,6 +24,7 @@
 #include "postmaster/bgworker.h"
 #include "postmaster/postmaster.h"
 
+#include "gucs.h"
 #include "rustica_wamr.h"
 
 typedef struct Socket Socket;

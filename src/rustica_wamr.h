@@ -27,11 +27,6 @@
 
 #define BACKEND_HELLO "RUSTICA!"
 
-extern char *rst_listen_addresses;
-extern int rst_port;
-extern int rst_worker_idle_timeout;
-extern char *rst_database;
-
 typedef struct FDMessage {
     struct msghdr msg;
     struct cmsghdr *cmsg;
@@ -39,9 +34,6 @@ typedef struct FDMessage {
     struct iovec io;
     char byte;
 } FDMessage;
-
-void
-rst_init_gucs();
 
 typedef struct WaitEventSetEx WaitEventSetEx;
 

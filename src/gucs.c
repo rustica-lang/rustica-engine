@@ -14,10 +14,10 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#include <string.h>
 #include "postgres.h"
 #include "utils/guc.h"
-#include "rustica_wamr.h"
+
+#include "gucs.h"
 
 char *rst_listen_addresses = NULL;
 int rst_port = 8080;
