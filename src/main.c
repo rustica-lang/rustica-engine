@@ -15,13 +15,12 @@
  */
 
 #include <sys/un.h>
+#include <wchar.h>
 
 #include "postgres.h"
 #include "fmgr.h"
 #include "postmaster/bgworker.h"
-
-#include "wasm_memory.h"
-#include "aot_export.h"
+#include "funcapi.h"
 
 #include "compiler.h"
 #include "gucs.h"
@@ -31,6 +30,33 @@
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(compile_wasm);
+
+static void
+native_noop(wasm_exec_env_t exec_env) {}
+
+NativeSymbol noop_native_env[] = {
+    { "recv", native_noop, "(rii)i" },
+    { "send", native_noop, "(rii)i" },
+    { "llhttp_execute", native_noop, "(rii)i" },
+    { "llhttp_resume", native_noop, "()i" },
+    { "llhttp_finish", native_noop, "(r)i" },
+    { "llhttp_reset", native_noop, "()i" },
+    { "llhttp_get_error_pos", native_noop, "(r)i" },
+    { "llhttp_get_method", native_noop, "()i" },
+    { "llhttp_get_http_major", native_noop, "()i" },
+    { "llhttp_get_http_minor", native_noop, "()i" },
+    { "execute_statement", native_noop, "(i)i" },
+    { "detoast", native_noop, "(iii)r" },
+};
+
+static void
+spectest_print_char(wasm_exec_env_t exec_env, int c) {
+    fwprintf(stderr, L"%lc", c);
+}
+
+static NativeSymbol spectest[] = {
+    { "print_char", spectest_print_char, "(i)" }
+};
 
 void
 make_ipc_addr(struct sockaddr_un *addr) {
@@ -44,19 +70,37 @@ void
 _PG_init() {
     rst_init_gucs();
 
-    if (!wasm_runtime_init()) {
-        ereport(FATAL, (errmsg("cannot initialize WAMR runtime")));
-    }
+    // Initialize WAMR runtime with native stubs
+    RuntimeInitArgs init_args = { .mem_alloc_type = Alloc_With_Allocator,
+                                  .mem_alloc_option = {
+                                      .allocator.malloc_func = palloc,
+                                      .allocator.realloc_func = repalloc,
+                                      .allocator.free_func = pfree,
+                                  },
+                                  .gc_heap_size = 16 * 1024 * 1024 };
+    MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
+    if (!wasm_runtime_full_init(&init_args))
+        ereport(FATAL, (errmsg("cannot register WASM natives")));
+    if (!wasm_runtime_register_natives("spectest",
+                                       spectest,
+                                       sizeof(spectest) / sizeof(spectest[0])))
+        ereport(ERROR, errmsg("cannot register WASM natives"));
+    if (!wasm_runtime_register_natives("env",
+                                       noop_native_env,
+                                       sizeof(noop_native_env)
+                                           / sizeof(noop_native_env[0])))
+        ereport(ERROR, errmsg("cannot instantiate WASM module"));
+    MemoryContextSwitchTo(tx_mctx);
 
-    BackgroundWorker master;
+    // Start up the Rustica master process
+    BackgroundWorker master = { .bgw_flags = BGWORKER_SHMEM_ACCESS,
+                                .bgw_start_time = BgWorkerStart_PostmasterStart,
+                                .bgw_restart_time = 10,
+                                .bgw_notify_pid = 0 };
     snprintf(master.bgw_name, BGW_MAXLEN, "rustica master");
     snprintf(master.bgw_type, BGW_MAXLEN, "rustica master");
-    master.bgw_flags = BGWORKER_SHMEM_ACCESS;
-    master.bgw_start_time = BgWorkerStart_PostmasterStart;
-    master.bgw_restart_time = 10;
     snprintf(master.bgw_library_name, BGW_MAXLEN, "rustica-wamr");
     snprintf(master.bgw_function_name, BGW_MAXLEN, "rustica_master");
-    master.bgw_notify_pid = 0;
     RegisterBackgroundWorker(&master);
 }
 
@@ -67,6 +111,5 @@ compile_wasm(PG_FUNCTION_ARGS) {
 
 void
 _PG_fini() {
-    aot_compiler_destroy();
-    wasm_runtime_memory_destroy();
+    wasm_runtime_destroy();
 }

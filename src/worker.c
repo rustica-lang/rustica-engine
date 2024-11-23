@@ -14,9 +14,7 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#include <sys/socket.h>
 #include <sys/un.h>
-#include <wchar.h>
 
 #include "postgres.h"
 #include "miscadmin.h"
@@ -31,8 +29,6 @@
 #include "utils/snapmgr.h"
 #include "pgstat.h"
 #include "tcop/utility.h"
-#include "wasm_runtime_common.h"
-#include "wasm_memory.h"
 #include "aot_runtime.h"
 #include "llhttp.h"
 
@@ -54,15 +50,6 @@ static FDMessage fd_msg;
 static SPIPlanPtr load_module_plan = NULL;
 static const char *load_module_sql =
     "SELECT bin_code FROM rustica.modules WHERE name = $1";
-
-void
-spectest_print_char(wasm_exec_env_t exec_env, int c) {
-    fwprintf(stderr, L"%lc", c);
-}
-
-static NativeSymbol spectest[] = {
-    { "print_char", spectest_print_char, "(i)" }
-};
 
 static int32_t
 env_recv(wasm_exec_env_t exec_env,
@@ -430,12 +417,6 @@ static void
 startup() {
     struct sockaddr_un addr;
 
-    MemAllocOption mem_option = { 0 };
-    mem_option.allocator.malloc_func = palloc;
-    mem_option.allocator.realloc_func = repalloc;
-    mem_option.allocator.free_func = pfree;
-    wasm_runtime_memory_init(Alloc_With_Allocator, &mem_option);
-
     memset(&fd_msg, 0, sizeof(FDMessage));
     fd_msg.io.iov_base = &fd_msg.byte;
     fd_msg.io.iov_len = 1;
@@ -492,9 +473,7 @@ startup() {
         SPI_finish();
         CommitTransactionCommand();
     }
-    if (!wasm_runtime_register_natives("spectest", spectest, 1))
-        ereport(FATAL,
-                (errmsg("rustica-%d: could not register natives", worker_id)));
+    wasm_runtime_unregister_natives("env", noop_native_env);
     if (!wasm_runtime_register_natives("env",
                                        native_env,
                                        sizeof(native_env)

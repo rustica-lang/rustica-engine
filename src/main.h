@@ -17,6 +17,10 @@
 #ifndef RUSTICA_MAIN_H
 #define RUSTICA_MAIN_H
 
+#include <sys/socket.h>
+
+#include "wasm_export.h"
+
 #define BACKEND_HELLO "RUSTICA!"
 
 typedef struct FDMessage {
@@ -29,5 +33,7 @@ typedef struct FDMessage {
 
 void
 make_ipc_addr(struct sockaddr_un *addr);
+
+extern NativeSymbol noop_native_env[];
 
 #endif /* RUSTICA_MAIN_H */
