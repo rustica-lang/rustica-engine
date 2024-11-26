@@ -333,6 +333,25 @@ endif
 format:
 	find src -name '*.h' -o -name "*.c" | xargs clang-format -i
 
+GITEE_COMMIT ?= $(shell git rev-parse HEAD)
+.PHONY: build-hce
+build-hce:
+	docker run -it --rm \
+		-v $(PWD):/rusticadb \
+		-w /rusticadb \
+		-e VERSION=${GITEE_COMMIT} \
+		swr.cn-north-4.myhuaweicloud.com/rustica/neon-comppute-hce-pg16:latest \
+		bash .workflow/build.sh
+
+.PHONY: upload-hce
+upload-hce:
+	docker run -it --rm \
+		-v $(PWD):/rusticadb \
+		-w /rusticadb \
+		-e VERSION=${GITEE_COMMIT} \
+		swr.cn-north-4.myhuaweicloud.com/rustica/obsutil:latest \
+		bash .workflow/upload.sh
+
 .PHONY: nuke
 nuke: clean
 	rm -rf $(VENDOR_DIR)
