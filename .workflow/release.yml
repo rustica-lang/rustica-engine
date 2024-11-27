@@ -5,13 +5,12 @@ triggers:
   trigger: manual
   push:
     branches:
-      include:
-        - master
+      prefix:
+        - ''
   pr:
     branches:
       prefix:
         - ''
-variables:
 stages:
   - name: build-stage
     displayName: 构建燕几图数据库
@@ -20,7 +19,7 @@ stages:
     steps:
       - step: execute@docker
         name: build
-        displayName: 打包构建
+        displayName: 打包
         certificate: bd032500-8921-013c-01b0-261cd6c176b8
         image: swr.cn-north-4.myhuaweicloud.com/rustica/neon-comppute-hce-pg16:latest
         command:
@@ -28,11 +27,11 @@ stages:
         artifacts:
           - name: BUILD_ARTIFACT
             path:
-              - /home/nonroot/neon/neon-rusticadb-${GITEE_COMMIT}.zip
+              - .output/neon-rusticadb-${GITEE_COMMIT}.zip
         strategy: {}
       - step: execute@docker
-        name: deploy
-        displayName: 上传构建产物
+        name: upload
+        displayName: 上传
         certificate: bd032500-8921-013c-01b0-261cd6c176b8
         image: swr.cn-north-4.myhuaweicloud.com/rustica/obsutil:latest
         command:
@@ -41,6 +40,7 @@ stages:
           - tar -zxvf artifact_BUILD_ARTIFACT.tar.gz -C .output/
           - VERSION=${GITEE_COMMIT} bash .workflow/upload.sh
         strategy: {}
+        dependsOn: build
 strategy:
   blocking: true
   stepTimeout: 10
