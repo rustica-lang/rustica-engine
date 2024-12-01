@@ -24,6 +24,7 @@
 #include "postmaster/bgworker.h"
 #include "postmaster/postmaster.h"
 
+#include "event_set.h"
 #include "gucs.h"
 #include "rustica_wamr.h"
 

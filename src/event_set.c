@@ -14,14 +14,11 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#include "postgres.h"
-#include <storage/latch.h>
+#include "event_set.h"
 
 #ifdef HAVE_SYS_EPOLL_H
 #include <sys/epoll.h>
 #endif
-
-#include "rustica_wamr.h"
 
 struct WaitEventSet {
     int nevents;

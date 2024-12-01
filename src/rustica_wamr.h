@@ -35,37 +35,6 @@ typedef struct FDMessage {
     char byte;
 } FDMessage;
 
-typedef struct WaitEventSetEx WaitEventSetEx;
-
-WaitEventSetEx *
-CreateWaitEventSetEx(MemoryContext context, int nevents);
-
-int
-AddWaitEventToSetEx(WaitEventSetEx *set,
-                    uint32 events,
-                    pgsocket fd,
-                    Latch *latch,
-                    void *user_data);
-
-int
-NextWaitEventPos(WaitEventSetEx *set);
-
-void
-ModifyWaitEventEx(WaitEventSetEx *set, int pos, uint32 events, Latch *latch);
-
-void
-DeleteWaitEventEx(WaitEventSetEx *set, int pos);
-
-int
-WaitEventSetWaitEx(WaitEventSetEx *set,
-                   long timeout,
-                   WaitEvent *occurred_events,
-                   int nevents,
-                   uint32 wait_event_info);
-
-void
-FreeWaitEventSetEx(WaitEventSetEx *set);
-
 void
 make_ipc_addr(struct sockaddr_un *addr);
 
