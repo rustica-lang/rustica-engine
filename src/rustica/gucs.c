@@ -17,7 +17,7 @@
 #include "postgres.h"
 #include "utils/guc.h"
 
-#include "gucs.h"
+#include "rustica/gucs.h"
 
 char *rst_listen_addresses = NULL;
 int rst_port = 8080;

@@ -25,7 +25,7 @@
 #include "dwarf_extractor.h"
 #endif
 
-#include "compiler.h"
+#include "rustica/compiler.h"
 
 Datum
 rst_compile(PG_FUNCTION_ARGS) {

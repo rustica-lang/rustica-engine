@@ -1,5 +1,5 @@
 /.idea/
 /*.so
-/src/*.bc
-/src/*.o
+/src/**/*.bc
+/src/**/*.o
 /vendor/

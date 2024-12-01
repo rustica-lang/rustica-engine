@@ -32,9 +32,9 @@
 #include "aot_runtime.h"
 #include "llhttp.h"
 
-#include "gucs.h"
-#include "main.h"
-#include "rustica_spi.h"
+#include "rustica/gucs.h"
+#include "rustica/main.h"
+#include "rustica/spi.h"
 
 #define WAIT_WRITE 0
 #define WAIT_READ 0

@@ -23,9 +23,9 @@
 #include "postmaster/bgworker.h"
 #include "funcapi.h"
 
-#include "compiler.h"
-#include "gucs.h"
-#include "main.h"
+#include "rustica/compiler.h"
+#include "rustica/gucs.h"
+#include "rustica/main.h"
 
 PG_MODULE_MAGIC;
 

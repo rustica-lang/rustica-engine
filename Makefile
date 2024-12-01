@@ -102,13 +102,13 @@ OBJS = \
     $(LLHTTP_SRC)/src/api.o \
     $(LLHTTP_SRC)/src/http.o \
     $(LLHTTP_SRC)/src/llhttp.o \
-	src/compiler.o \
-	src/main.o \
-	src/gucs.o \
-	src/event_set.o \
-	src/worker.o \
-	src/spi.o \
-	src/master.o
+	src/rustica/compiler.o \
+	src/rustica/main.o \
+	src/rustica/gucs.o \
+	src/rustica/event_set.o \
+	src/rustica/worker.o \
+	src/rustica/spi.o \
+	src/rustica/master.o
 
 WAMR_DEFINES = \
 	-DBUILD_TARGET_X86_64 \
@@ -157,6 +157,7 @@ WAMR_DEFINES = \
 	-DWASM_ENABLE_MEMORY64=0
 
 ALL_INCLUDES = \
+	-Isrc \
 	-I$(WAMR_CORE_ROOT) \
 	-I$(WAMR_IWASM_ROOT)/include \
 	-I$(WAMR_IWASM_ROOT)/common \

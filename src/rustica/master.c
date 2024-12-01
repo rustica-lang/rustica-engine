@@ -24,9 +24,9 @@
 #include "postmaster/bgworker.h"
 #include "postmaster/postmaster.h"
 
-#include "event_set.h"
-#include "gucs.h"
-#include "main.h"
+#include "rustica/event_set.h"
+#include "rustica/gucs.h"
+#include "rustica/main.h"
 
 typedef struct Socket Socket;
 
