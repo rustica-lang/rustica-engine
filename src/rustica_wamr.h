@@ -25,19 +25,6 @@
 #include "wasm_runtime_common.h"
 #include <storage/latch.h>
 
-#define BACKEND_HELLO "RUSTICA!"
-
-typedef struct FDMessage {
-    struct msghdr msg;
-    struct cmsghdr *cmsg;
-    char buf[CMSG_SPACE(sizeof(int))];
-    struct iovec io;
-    char byte;
-} FDMessage;
-
-void
-make_ipc_addr(struct sockaddr_un *addr);
-
 typedef struct Context {
     WaitEventSet *wait_set;
     pgsocket fd;

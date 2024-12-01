@@ -25,6 +25,7 @@
 
 #include "compiler.h"
 #include "gucs.h"
+#include "main.h"
 #include "rustica_wamr.h"
 
 PG_MODULE_MAGIC;

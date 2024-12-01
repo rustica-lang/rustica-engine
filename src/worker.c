@@ -37,6 +37,7 @@
 #include "llhttp.h"
 
 #include "gucs.h"
+#include "main.h"
 #include "rustica_wamr.h"
 
 #define WAIT_WRITE 0

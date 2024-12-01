@@ -26,6 +26,7 @@
 
 #include "event_set.h"
 #include "gucs.h"
+#include "main.h"
 #include "rustica_wamr.h"
 
 typedef struct Socket Socket;
