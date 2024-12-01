@@ -14,16 +14,18 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#ifndef RUSTICA_WAMR_H
-#define RUSTICA_WAMR_H
+#ifndef RUSTICA_SPI_H
+#define RUSTICA_SPI_H
 
 #include <sys/socket.h>
 
 #include "postgres.h"
 #include "executor/spi.h"
+#include "storage/latch.h"
+
 #include "llhttp.h"
+
 #include "wasm_runtime_common.h"
-#include <storage/latch.h>
 
 typedef struct Context {
     WaitEventSet *wait_set;
@@ -92,4 +94,4 @@ env_detoast(wasm_exec_env_t exec_env,
             int32_t row,
             int32_t col);
 
-#endif /* RUSTICA_WAMR_H */
+#endif /* RUSTICA_SPI_H */

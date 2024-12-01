@@ -34,7 +34,7 @@
 
 #include "gucs.h"
 #include "main.h"
-#include "rustica_wamr.h"
+#include "rustica_spi.h"
 
 #define WAIT_WRITE 0
 #define WAIT_READ 0

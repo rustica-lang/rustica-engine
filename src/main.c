@@ -14,6 +14,7 @@
  * See the Mulan PSL v2 for more details.
  */
 
+#include <sys/socket.h>
 #include <sys/un.h>
 #include <wchar.h>
 
@@ -25,7 +26,6 @@
 #include "compiler.h"
 #include "gucs.h"
 #include "main.h"
-#include "rustica_wamr.h"
 
 PG_MODULE_MAGIC;
 
