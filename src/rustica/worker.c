@@ -35,6 +35,7 @@
 #include "rustica/gucs.h"
 #include "rustica/main.h"
 #include "rustica/spi.h"
+#include "rustica/wamr.h"
 
 #define WAIT_WRITE 0
 #define WAIT_READ 0
@@ -473,7 +474,7 @@ startup() {
         SPI_finish();
         CommitTransactionCommand();
     }
-    wasm_runtime_unregister_natives("env", noop_native_env);
+    wasm_runtime_unregister_natives("env", rst_noop_native_env);
     if (!wasm_runtime_register_natives("env",
                                        native_env,
                                        sizeof(native_env)

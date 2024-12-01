@@ -14,24 +14,17 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#ifndef RUSTICA_MAIN_H
-#define RUSTICA_MAIN_H
+#ifndef RUSTICA_WAMR_H
+#define RUSTICA_WAMR_H
 
-#include <sys/socket.h>
+#include "wasm_runtime_common.h"
 
-#include "wasm_export.h"
-
-#define BACKEND_HELLO "RUSTICA!"
-
-typedef struct FDMessage {
-    struct msghdr msg;
-    struct cmsghdr *cmsg;
-    char buf[CMSG_SPACE(sizeof(int))];
-    struct iovec io;
-    char byte;
-} FDMessage;
+extern NativeSymbol rst_noop_native_env[];
 
 void
-make_ipc_addr(struct sockaddr_un *addr);
+rst_init_wamr();
 
-#endif /* RUSTICA_MAIN_H */
+void
+rst_fini_wamr();
+
+#endif /* RUSTICA_WAMR_H */
