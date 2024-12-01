@@ -109,6 +109,7 @@ OBJS = \
 	src/rustica/worker.o \
 	src/rustica/spi.o \
 	src/rustica/wamr.o \
+	src/rustica/utils.o \
 	src/rustica/master.o
 
 WAMR_DEFINES = \

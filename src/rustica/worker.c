@@ -33,7 +33,7 @@
 #include "llhttp.h"
 
 #include "rustica/gucs.h"
-#include "rustica/main.h"
+#include "rustica/utils.h"
 #include "rustica/spi.h"
 #include "rustica/wamr.h"
 
@@ -438,7 +438,7 @@ startup() {
         ereport(FATAL,
                 (errmsg("rustica-%d: could not create Unix socket: %m",
                         worker_id)));
-    make_ipc_addr(&addr);
+    rst_make_ipc_addr(&addr);
     if (connect(sock, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) < 0)
         ereport(FATAL,
                 (errmsg("rustica-%d: could not connect Unix socket: %m",

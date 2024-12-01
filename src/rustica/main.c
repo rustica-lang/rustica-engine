@@ -14,30 +14,17 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#include <sys/socket.h>
-#include <sys/un.h>
-
 #include "postgres.h"
-#include "fmgr.h"
 #include "postmaster/bgworker.h"
-#include "funcapi.h"
+#include "utils/memutils.h"
 
 #include "rustica/compiler.h"
 #include "rustica/gucs.h"
-#include "rustica/main.h"
 #include "rustica/wamr.h"
 
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(compile_wasm);
-
-void
-make_ipc_addr(struct sockaddr_un *addr) {
-    memset(addr, 0, sizeof(struct sockaddr_un));
-    addr->sun_family = AF_UNIX;
-    addr->sun_path[0] = '\0';
-    snprintf(&addr->sun_path[1], sizeof(addr->sun_path) - 1, "rustica-ipc");
-}
 
 void
 _PG_init() {

@@ -14,24 +14,15 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#ifndef RUSTICA_MAIN_H
-#define RUSTICA_MAIN_H
+#include <stdio.h>
+#include <sys/un.h>
 
-#include <sys/socket.h>
-
-#include "wasm_export.h"
-
-#define BACKEND_HELLO "RUSTICA!"
-
-typedef struct FDMessage {
-    struct msghdr msg;
-    struct cmsghdr *cmsg;
-    char buf[CMSG_SPACE(sizeof(int))];
-    struct iovec io;
-    char byte;
-} FDMessage;
+#include "rustica/utils.h"
 
 void
-make_ipc_addr(struct sockaddr_un *addr);
-
-#endif /* RUSTICA_MAIN_H */
+rst_make_ipc_addr(struct sockaddr_un *addr) {
+    memset(addr, 0, sizeof(struct sockaddr_un));
+    addr->sun_family = AF_UNIX;
+    addr->sun_path[0] = '\0';
+    snprintf(&addr->sun_path[1], sizeof(addr->sun_path) - 1, "rustica-ipc");
+}

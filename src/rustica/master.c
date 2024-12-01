@@ -26,7 +26,7 @@
 
 #include "rustica/event_set.h"
 #include "rustica/gucs.h"
-#include "rustica/main.h"
+#include "rustica/utils.h"
 
 typedef struct Socket Socket;
 
@@ -125,7 +125,7 @@ listen_backend() {
     ipc_sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (ipc_sock == PGINVALID_SOCKET)
         ereport(FATAL, (errmsg("could not create Unix-domain socket")));
-    make_ipc_addr(&addr);
+    rst_make_ipc_addr(&addr);
     err = bind(ipc_sock, (struct sockaddr *)&addr, sizeof(struct sockaddr_un));
     if (err < 0)
         ereport(FATAL,
