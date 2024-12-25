@@ -636,179 +636,224 @@ on_readable() {
                 (errmsg("rustica-%d: failed to recvmsg: %m", worker_id)));
     }
     client = *((int *)CMSG_DATA(fd_msg.cmsg));
+    ereport(DEBUG1,
+            errmsg("rustica-%d: received job: fd=%d", worker_id, client));
 
-    if (rst_database == NULL) {
-        ereport(DEBUG1,
-                (errmsg("rustica-%d: received job: fd=%d", worker_id, client)));
-        resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
-               "37\r\n\r\nrustica.database is never configured\n";
-        send(client, resp, strlen(resp), 0);
-        goto finally1;
-    }
+    PG_TRY();
+    {
+        PG_TRY(2);
+        {
+            if (rst_database == NULL)
+                ereport(ERROR,
+                        errcode(ERRCODE_NO_DATA_FOUND),
+                        errmsg("rustica.database is never configured"));
 
-    SetCurrentStatementStartTimestamp();
-    StartTransactionCommand();
+            SetCurrentStatementStartTimestamp();
+            StartTransactionCommand();
 
-    SPI_connect();
-    PushActiveSnapshot(GetTransactionSnapshot());
-    debug_query_string = load_module_sql;
-    pgstat_report_activity(STATE_RUNNING, "loading WASM application");
+            SPI_connect();
+            PushActiveSnapshot(GetTransactionSnapshot());
+            debug_query_string = load_module_sql;
+            pgstat_report_activity(STATE_RUNNING, "loading WASM application");
 
-    module = wasm_runtime_find_module_registered("main");
-    if (module == NULL) {
-        ereport(DEBUG1,
-                (errmsg("rustica-%d: load module \"main\"", worker_id)));
-        name_datum = CStringGetTextDatum("main");
-        ret = SPI_execute_plan(load_module_plan, &name_datum, NULL, true, 1);
-        if (ret != SPI_OK_SELECT || SPI_processed == 0) {
-            resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
-                   "23\r\n\r\ncan't find main module\n";
-            send(client, resp, strlen(resp), 0);
-            goto finally2;
-        }
+            module = wasm_runtime_find_module_registered("main");
+            if (module == NULL) {
+                ereport(
+                    DEBUG1,
+                    (errmsg("rustica-%d: load module \"main\"", worker_id)));
+                name_datum = CStringGetTextDatum("main");
+                ret = SPI_execute_plan(load_module_plan,
+                                       &name_datum,
+                                       NULL,
+                                       true,
+                                       1);
+                if (ret != SPI_OK_SELECT || SPI_processed == 0) {
+                    resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
+                           "23\r\n\r\ncan't find main module\n";
+                    send(client, resp, strlen(resp), 0);
+                    goto finally2;
+                }
 
-        bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
-                                                 SPI_tuptable->tupdesc,
-                                                 1,
-                                                 &isnull));
-        debug_query_string = NULL;
+                bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
+                                                         SPI_tuptable->tupdesc,
+                                                         1,
+                                                         &isnull));
+                debug_query_string = NULL;
 
-        load_args.name = "";
-        load_args.wasm_binary_freeable = true;
+                load_args.name = "";
+                load_args.wasm_binary_freeable = true;
 
-        MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
-        module = wasm_runtime_load_ex((uint8 *)VARDATA_ANY(bin_code),
-                                      VARSIZE_ANY_EXHDR(bin_code),
-                                      &load_args,
-                                      error_buf,
-                                      sizeof(error_buf));
-        if (!module) {
-            MemoryContextSwitchTo(tx_mctx);
-            ereport(WARNING, (errmsg("bad WASM bin_code: %s", error_buf)));
-            resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-                   "13\r\n\r\nBad bin_code\n";
-            send(client, resp, strlen(resp), 0);
-            goto finally2;
-        }
-        // due to the lazy loading of `rtt_types` objects which are allocated
-        // in the module's instantiate phase and released with popping
-        // transactional memory context, potential crashes can occur.
-        // To resolve this issue, we preload all rtt_type objects within the
-        // TopMemoryContext.
-        AOTModule *aot_module = (AOTModule *)module;
-        for (uint32 i = 0; i < aot_module->type_count; i++) {
-            if (!wasm_rtt_type_new(aot_module->types[i],
-                                   i,
-                                   aot_module->rtt_types,
-                                   aot_module->type_count,
-                                   &aot_module->rtt_type_lock)) {
-                wasm_runtime_unload(module);
+                MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
+                module = wasm_runtime_load_ex((uint8 *)VARDATA_ANY(bin_code),
+                                              VARSIZE_ANY_EXHDR(bin_code),
+                                              &load_args,
+                                              error_buf,
+                                              sizeof(error_buf));
+                if (!module) {
+                    MemoryContextSwitchTo(tx_mctx);
+                    ereport(WARNING,
+                            (errmsg("bad WASM bin_code: %s", error_buf)));
+                    resp =
+                        "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+                        "13\r\n\r\nBad bin_code\n";
+                    send(client, resp, strlen(resp), 0);
+                    goto finally2;
+                }
+                // due to the lazy loading of `rtt_types` objects which are
+                // allocated in the module's instantiate phase and released with
+                // popping transactional memory context, potential crashes can
+                // occur. To resolve this issue, we preload all rtt_type objects
+                // within the TopMemoryContext.
+                AOTModule *aot_module = (AOTModule *)module;
+                for (uint32 i = 0; i < aot_module->type_count; i++) {
+                    if (!wasm_rtt_type_new(aot_module->types[i],
+                                           i,
+                                           aot_module->rtt_types,
+                                           aot_module->type_count,
+                                           &aot_module->rtt_type_lock)) {
+                        wasm_runtime_unload(module);
+                        MemoryContextSwitchTo(tx_mctx);
+                        ereport(WARNING, errmsg("create rtt object failed"));
+                        resp = "HTTP/1.0 500 Internal Server "
+                               "Error\r\nContent-Length: "
+                               "28\r\n\r\nFailed to create rtt object\n";
+                        send(client, resp, strlen(resp), 0);
+                        goto finally2;
+                    }
+                }
+                wasm_runtime_register_module("main",
+                                             module,
+                                             error_buf,
+                                             sizeof(error_buf));
                 MemoryContextSwitchTo(tx_mctx);
-                ereport(WARNING, errmsg("create rtt object failed"));
+            }
+
+            pgstat_report_activity(STATE_RUNNING, "running WASM application");
+
+            instance = wasm_runtime_instantiate(module,
+                                                64 * 1024,
+                                                1024 * 1024,
+                                                error_buf,
+                                                sizeof(error_buf));
+            if (!instance) {
+                ereport(WARNING,
+                        (errmsg("failed to instantiate: %s", error_buf)));
                 resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-                       "28\r\n\r\nFailed to create rtt object\n";
+                       "21\r\n\r\nInstantiation failed\n";
                 send(client, resp, strlen(resp), 0);
                 goto finally2;
             }
+
+            exec_env = wasm_runtime_create_exec_env(instance, 64 * 1024);
+            if (!exec_env) {
+                ereport(WARNING,
+                        (errmsg("failed to instantiate WASM application")));
+                resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+                       "17\r\n\r\nExecution failed\n";
+                send(client, resp, strlen(resp), 0);
+                goto finally3;
+            }
+
+            Context context = { 0 };
+            context.fd = client;
+            wasm_runtime_set_user_data(exec_env, &context);
+            context.wait_set = CreateWaitEventSet(CurrentMemoryContext, 2);
+            AddWaitEventToSet(context.wait_set,
+                              WL_LATCH_SET,
+                              PGINVALID_SOCKET,
+                              MyLatch,
+                              NULL);
+            AddWaitEventToSet(context.wait_set,
+                              WL_SOCKET_CLOSED,
+                              client,
+                              NULL,
+                              NULL);
+
+            init_llhttp(&context, instance);
+            context.http_parser.data = exec_env;
+
+            init_pg(&context, instance);
+
+            start_func = wasm_runtime_lookup_function(instance, "_start");
+            if (start_func) {
+                if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
+                    ereport(WARNING, errmsg("failed to run _start"));
+                }
+            }
+
+            start_func = wasm_runtime_lookup_function(instance, "init_modules");
+            if (start_func) {
+                wasm_val_t rv;
+                if (!wasm_runtime_call_wasm_a(exec_env,
+                                              start_func,
+                                              1,
+                                              &rv,
+                                              0,
+                                              NULL)) {
+                    ereport(WARNING, errmsg("failed to run init_modules"));
+                }
+                if (rv.of.i32 == -1) {
+                    free_app_plans();
+                }
+            }
+
+            start_func = wasm_runtime_lookup_function(instance, "run");
+            if (!start_func) {
+                ereport(WARNING, (errmsg("cannot find WASM entrypoint")));
+                resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+                       "21\r\n\r\nBad WASM application\n";
+                send(client, resp, strlen(resp), 0);
+                goto finally4;
+            }
+            if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
+                resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
+                       "32\r\n\r\nFailed to run WASM application\n";
+                send(client, resp, strlen(resp), 0);
+            }
+        finally4:
+            wasm_runtime_destroy_exec_env(exec_env);
+
+        finally3:
+            wasm_runtime_deinstantiate(instance);
+
+        finally2:
+            SPI_finish();
+            PopActiveSnapshot();
+            CommitTransactionCommand();
+            debug_query_string = NULL;
+            pgstat_report_stat(true);
+            pgstat_report_activity(STATE_IDLE, NULL);
+            tuptables_size = 0;
         }
-        wasm_runtime_register_module("main",
-                                     module,
-                                     error_buf,
-                                     sizeof(error_buf));
-        MemoryContextSwitchTo(tx_mctx);
-    }
-
-    pgstat_report_activity(STATE_RUNNING, "running WASM application");
-
-    instance = wasm_runtime_instantiate(module,
-                                        64 * 1024,
-                                        1024 * 1024,
-                                        error_buf,
-                                        sizeof(error_buf));
-    if (!instance) {
-        ereport(WARNING, (errmsg("failed to instantiate: %s", error_buf)));
-        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-               "21\r\n\r\nInstantiation failed\n";
-        send(client, resp, strlen(resp), 0);
-        goto finally2;
-    }
-
-    exec_env = wasm_runtime_create_exec_env(instance, 64 * 1024);
-    if (!exec_env) {
-        ereport(WARNING, (errmsg("failed to instantiate WASM application")));
-        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-               "17\r\n\r\nExecution failed\n";
-        send(client, resp, strlen(resp), 0);
-        goto finally3;
-    }
-
-    Context context = { 0 };
-    context.fd = client;
-    wasm_runtime_set_user_data(exec_env, &context);
-    context.wait_set = CreateWaitEventSet(CurrentMemoryContext, 2);
-    AddWaitEventToSet(context.wait_set,
-                      WL_LATCH_SET,
-                      PGINVALID_SOCKET,
-                      MyLatch,
-                      NULL);
-    AddWaitEventToSet(context.wait_set, WL_SOCKET_CLOSED, client, NULL, NULL);
-
-    init_llhttp(&context, instance);
-    context.http_parser.data = exec_env;
-
-    init_pg(&context, instance);
-
-    start_func = wasm_runtime_lookup_function(instance, "_start");
-    if (start_func) {
-        if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
-            ereport(WARNING, errmsg("failed to run _start"));
+        PG_CATCH(2);
+        {
+            ErrorData *edata = CopyErrorData();
+            llhttp_status_t status = HTTP_STATUS_INTERNAL_SERVER_ERROR;
+            if (edata->sqlerrcode == ERRCODE_NO_DATA_FOUND) {
+                status = HTTP_STATUS_NOT_FOUND;
+            }
+            char *resp =
+                psprintf("HTTP/1.0 %d %s\r\nContent-Length: %ld\r\n\r\n%s\r\n",
+                         status,
+                         llhttp_status_name(status),
+                         strlen(edata->message),
+                         edata->message);
+            FreeErrorData(edata);
+            send(client, resp, strlen(resp), 0);
+            pfree(resp);
         }
+        PG_END_TRY(2);
     }
-
-    start_func = wasm_runtime_lookup_function(instance, "init_modules");
-    if (start_func) {
-        wasm_val_t rv;
-        if (!wasm_runtime_call_wasm_a(exec_env, start_func, 1, &rv, 0, NULL)) {
-            ereport(WARNING, errmsg("failed to run init_modules"));
-        }
-        if (rv.of.i32 == -1) {
-            free_app_plans();
-        }
+    PG_FINALLY();
+    {
+        StreamClose(client);
+        state = WAIT_WRITE;
+        ModifyWaitEvent(wait_set,
+                        1,
+                        WL_SOCKET_WRITEABLE | WL_SOCKET_CLOSED,
+                        NULL);
     }
-
-    start_func = wasm_runtime_lookup_function(instance, "run");
-    if (!start_func) {
-        ereport(WARNING, (errmsg("cannot find WASM entrypoint")));
-        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-               "21\r\n\r\nBad WASM application\n";
-        send(client, resp, strlen(resp), 0);
-        goto finally4;
-    }
-    if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
-        resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-               "32\r\n\r\nFailed to run WASM application\n";
-        send(client, resp, strlen(resp), 0);
-    }
-
-finally4:
-    wasm_runtime_destroy_exec_env(exec_env);
-
-finally3:
-    wasm_runtime_deinstantiate(instance);
-
-finally2:
-    SPI_finish();
-    PopActiveSnapshot();
-    CommitTransactionCommand();
-    debug_query_string = NULL;
-    pgstat_report_stat(true);
-    pgstat_report_activity(STATE_IDLE, NULL);
-    tuptables_size = 0;
-
-finally1:
-    StreamClose(client);
-    state = WAIT_WRITE;
-    ModifyWaitEvent(wait_set, 1, WL_SOCKET_WRITEABLE | WL_SOCKET_CLOSED, NULL);
+    PG_END_TRY();
 }
 
 static void
