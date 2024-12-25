@@ -639,6 +639,9 @@ on_readable() {
     ereport(DEBUG1,
             errmsg("rustica-%d: received job: fd=%d", worker_id, client));
 
+    // Prepare to handle the connection
+    bool spi_connected = false;
+
     PG_TRY();
     {
         PG_TRY(2);
@@ -648,31 +651,32 @@ on_readable() {
                         errcode(ERRCODE_NO_DATA_FOUND),
                         errmsg("rustica.database is never configured"));
 
+            // Connect to SPI
             SetCurrentStatementStartTimestamp();
             StartTransactionCommand();
-
             SPI_connect();
             PushActiveSnapshot(GetTransactionSnapshot());
-            debug_query_string = load_module_sql;
-            pgstat_report_activity(STATE_RUNNING, "loading WASM application");
+            spi_connected = true;
 
+            // Load module if it's not loaded already
             module = wasm_runtime_find_module_registered("main");
             if (module == NULL) {
+                pgstat_report_activity(STATE_RUNNING,
+                                       "loading WASM application");
                 ereport(
                     DEBUG1,
                     (errmsg("rustica-%d: load module \"main\"", worker_id)));
                 name_datum = CStringGetTextDatum("main");
+                debug_query_string = load_module_sql;
                 ret = SPI_execute_plan(load_module_plan,
                                        &name_datum,
                                        NULL,
                                        true,
                                        1);
-                if (ret != SPI_OK_SELECT || SPI_processed == 0) {
-                    resp = "HTTP/1.0 404 Not Found\r\nContent-Length: "
-                           "23\r\n\r\ncan't find main module\n";
-                    send(client, resp, strlen(resp), 0);
-                    goto finally2;
-                }
+                if (ret != SPI_OK_SELECT || SPI_processed == 0)
+                    ereport(ERROR,
+                            errcode(ERRCODE_NO_DATA_FOUND),
+                            errmsg("can't find main module"));
 
                 bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
                                                          SPI_tuptable->tupdesc,
@@ -691,13 +695,7 @@ on_readable() {
                                               sizeof(error_buf));
                 if (!module) {
                     MemoryContextSwitchTo(tx_mctx);
-                    ereport(WARNING,
-                            (errmsg("bad WASM bin_code: %s", error_buf)));
-                    resp =
-                        "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-                        "13\r\n\r\nBad bin_code\n";
-                    send(client, resp, strlen(resp), 0);
-                    goto finally2;
+                    ereport(ERROR, errmsg("bad WASM bin_code: %s", error_buf));
                 }
                 // due to the lazy loading of `rtt_types` objects which are
                 // allocated in the module's instantiate phase and released with
@@ -713,12 +711,7 @@ on_readable() {
                                            &aot_module->rtt_type_lock)) {
                         wasm_runtime_unload(module);
                         MemoryContextSwitchTo(tx_mctx);
-                        ereport(WARNING, errmsg("create rtt object failed"));
-                        resp = "HTTP/1.0 500 Internal Server "
-                               "Error\r\nContent-Length: "
-                               "28\r\n\r\nFailed to create rtt object\n";
-                        send(client, resp, strlen(resp), 0);
-                        goto finally2;
+                        ereport(ERROR, errmsg("create rtt object failed"));
                     }
                 }
                 wasm_runtime_register_module("main",
@@ -735,14 +728,8 @@ on_readable() {
                                                 1024 * 1024,
                                                 error_buf,
                                                 sizeof(error_buf));
-            if (!instance) {
-                ereport(WARNING,
-                        (errmsg("failed to instantiate: %s", error_buf)));
-                resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-                       "21\r\n\r\nInstantiation failed\n";
-                send(client, resp, strlen(resp), 0);
-                goto finally2;
-            }
+            if (!instance)
+                ereport(ERROR, errmsg("failed to instantiate: %s", error_buf));
 
             exec_env = wasm_runtime_create_exec_env(instance, 64 * 1024);
             if (!exec_env) {
@@ -815,15 +802,6 @@ on_readable() {
 
         finally3:
             wasm_runtime_deinstantiate(instance);
-
-        finally2:
-            SPI_finish();
-            PopActiveSnapshot();
-            CommitTransactionCommand();
-            debug_query_string = NULL;
-            pgstat_report_stat(true);
-            pgstat_report_activity(STATE_IDLE, NULL);
-            tuptables_size = 0;
         }
         PG_CATCH(2);
         {
@@ -846,6 +824,16 @@ on_readable() {
     }
     PG_FINALLY();
     {
+        if (spi_connected) {
+            SPI_finish();
+            PopActiveSnapshot();
+            CommitTransactionCommand();
+            debug_query_string = NULL;
+            pgstat_report_stat(true);
+            pgstat_report_activity(STATE_IDLE, NULL);
+            tuptables_size = 0;
+        }
+
         StreamClose(client);
         state = WAIT_WRITE;
         ModifyWaitEvent(wait_set,
