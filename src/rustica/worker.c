@@ -619,7 +619,6 @@ init_pg(Context *ctx, wasm_module_inst_t instance) {
 static inline void
 on_readable() {
     pgsocket client;
-    char *resp;
     Datum name_datum;
     int ret;
     bool isnull;
@@ -627,8 +626,6 @@ on_readable() {
     LoadArgs load_args = { 0 };
     char error_buf[128];
     wasm_module_t module;
-    wasm_module_inst_t instance;
-    wasm_exec_env_t exec_env;
     wasm_function_inst_t start_func;
 
     if (recvmsg(sock, &fd_msg.msg, 0) < 0) {
@@ -641,6 +638,8 @@ on_readable() {
 
     // Prepare to handle the connection
     bool spi_connected = false;
+    wasm_exec_env_t exec_env = NULL;
+    wasm_module_inst_t instance = NULL;
 
     PG_TRY();
     {
@@ -732,14 +731,9 @@ on_readable() {
                 ereport(ERROR, errmsg("failed to instantiate: %s", error_buf));
 
             exec_env = wasm_runtime_create_exec_env(instance, 64 * 1024);
-            if (!exec_env) {
-                ereport(WARNING,
-                        (errmsg("failed to instantiate WASM application")));
-                resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-                       "17\r\n\r\nExecution failed\n";
-                send(client, resp, strlen(resp), 0);
-                goto finally3;
-            }
+            if (!exec_env)
+                ereport(ERROR,
+                        errmsg("failed to instantiate WASM application"));
 
             Context context = { 0 };
             context.fd = client;
@@ -785,23 +779,10 @@ on_readable() {
             }
 
             start_func = wasm_runtime_lookup_function(instance, "run");
-            if (!start_func) {
-                ereport(WARNING, (errmsg("cannot find WASM entrypoint")));
-                resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-                       "21\r\n\r\nBad WASM application\n";
-                send(client, resp, strlen(resp), 0);
-                goto finally4;
-            }
-            if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
-                resp = "HTTP/1.0 500 Internal Server Error\r\nContent-Length: "
-                       "32\r\n\r\nFailed to run WASM application\n";
-                send(client, resp, strlen(resp), 0);
-            }
-        finally4:
-            wasm_runtime_destroy_exec_env(exec_env);
-
-        finally3:
-            wasm_runtime_deinstantiate(instance);
+            if (!start_func)
+                ereport(ERROR, errmsg("cannot find WASM entrypoint"));
+            if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL))
+                ereport(ERROR, errmsg("failed to run WASM application"));
         }
         PG_CATCH(2);
         {
@@ -824,6 +805,12 @@ on_readable() {
     }
     PG_FINALLY();
     {
+        if (exec_env)
+            wasm_runtime_destroy_exec_env(exec_env);
+
+        if (instance)
+            wasm_runtime_deinstantiate(instance);
+
         if (spi_connected) {
             SPI_finish();
             PopActiveSnapshot();
