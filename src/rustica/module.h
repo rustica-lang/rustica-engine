@@ -17,13 +17,26 @@
 #ifndef RUSTICA_MODULE_H
 #define RUSTICA_MODULE_H
 
+#include "wasm_runtime_common.h"
+
 void
 rst_module_worker_startup();
 
 void
 rst_module_worker_teardown();
 
-void
+wasm_module_t
 rst_load_module(const char *name, uint8 **buffer, uint32 *size);
+
+wasm_module_t
+rst_lookup_module(const char *name);
+
+void
+rst_free_module(wasm_module_t module);
+
+wasm_exec_env_t
+rst_module_instantiate(wasm_module_t module,
+                       uint32 stack_size,
+                       uint32 heap_size);
 
 #endif /* RUSTICA_MODULE_H */

@@ -23,11 +23,9 @@
 #include "libpq/pqformat.h"
 #include "access/xact.h"
 #include "commands/async.h"
-#include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "pgstat.h"
 #include "tcop/utility.h"
-#include "aot_runtime.h"
 #include "llhttp.h"
 
 #include "rustica/gucs.h"
@@ -575,24 +573,18 @@ init_pg(Context *ctx, wasm_module_inst_t instance) {
 
 static inline void
 on_readable() {
-    pgsocket client;
-    LoadArgs load_args = { 0 };
-    char error_buf[128];
-    wasm_module_t module;
-    wasm_function_inst_t start_func;
-
+    // Take a job from the FD channel
     if (recvmsg(sock, &fd_msg.msg, 0) < 0) {
         ereport(FATAL,
                 (errmsg("rustica-%d: failed to recvmsg: %m", worker_id)));
     }
-    client = *((int *)CMSG_DATA(fd_msg.cmsg));
+    pgsocket client = *((int *)CMSG_DATA(fd_msg.cmsg));
     ereport(DEBUG1,
             errmsg("rustica-%d: received job: fd=%d", worker_id, client));
 
     // Prepare to handle the connection
     bool spi_connected = false;
     wasm_exec_env_t exec_env = NULL;
-    wasm_module_inst_t instance = NULL;
 
     PG_TRY();
     {
@@ -612,71 +604,22 @@ on_readable() {
 
             // Load module if it's not loaded already
             const char *name = "main";
-            module = wasm_runtime_find_module_registered(name);
+            wasm_module_t module = rst_lookup_module(name);
             if (module == NULL) {
                 pgstat_report_activity(STATE_RUNNING,
                                        "loading WASM application");
                 ereport(
                     DEBUG1,
                     errmsg("rustica-%d: load module \"%s\"", worker_id, name));
-                uint8 *buffer;
-                uint32 size;
-                rst_load_module(name, &buffer, &size);
-
-                load_args.name = "";
-                load_args.wasm_binary_freeable = true;
-
-                MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
-                module = wasm_runtime_load_ex(buffer,
-                                              size,
-                                              &load_args,
-                                              error_buf,
-                                              sizeof(error_buf));
-                if (!module) {
-                    MemoryContextSwitchTo(tx_mctx);
-                    ereport(ERROR, errmsg("bad WASM bin_code: %s", error_buf));
-                }
-                // due to the lazy loading of `rtt_types` objects which are
-                // allocated in the module's instantiate phase and released with
-                // popping transactional memory context, potential crashes can
-                // occur. To resolve this issue, we preload all rtt_type objects
-                // within the TopMemoryContext.
-                AOTModule *aot_module = (AOTModule *)module;
-                for (uint32 i = 0; i < aot_module->type_count; i++) {
-                    if (!wasm_rtt_type_new(aot_module->types[i],
-                                           i,
-                                           aot_module->rtt_types,
-                                           aot_module->type_count,
-                                           &aot_module->rtt_type_lock)) {
-                        wasm_runtime_unload(module);
-                        MemoryContextSwitchTo(tx_mctx);
-                        ereport(ERROR, errmsg("create rtt object failed"));
-                    }
-                }
-                wasm_runtime_register_module(name,
-                                             module,
-                                             error_buf,
-                                             sizeof(error_buf));
-                MemoryContextSwitchTo(tx_mctx);
+                module = rst_load_module(name, NULL, NULL);
             }
 
+            // Instantiate the WASM module
             pgstat_report_activity(STATE_RUNNING, "running WASM application");
+            exec_env = rst_module_instantiate(module, 256 * 1024, 1024 * 1024);
 
-            instance = wasm_runtime_instantiate(module,
-                                                64 * 1024,
-                                                1024 * 1024,
-                                                error_buf,
-                                                sizeof(error_buf));
-            if (!instance)
-                ereport(ERROR, errmsg("failed to instantiate: %s", error_buf));
-
-            exec_env = wasm_runtime_create_exec_env(instance, 64 * 1024);
-            if (!exec_env)
-                ereport(ERROR,
-                        errmsg("failed to instantiate WASM application"));
-
-            Context context = { 0 };
-            context.fd = client;
+            // Prepare context for execution
+            Context context = { .fd = client };
             wasm_runtime_set_user_data(exec_env, &context);
             context.wait_set = CreateWaitEventSet(CurrentMemoryContext, 2);
             AddWaitEventToSet(context.wait_set,
@@ -690,12 +633,14 @@ on_readable() {
                               NULL,
                               NULL);
 
+            wasm_module_inst_t instance =
+                wasm_exec_env_get_module_inst(exec_env);
             init_llhttp(&context, instance);
             context.http_parser.data = exec_env;
-
             init_pg(&context, instance);
 
-            start_func = wasm_runtime_lookup_function(instance, "_start");
+            wasm_function_inst_t start_func =
+                wasm_runtime_lookup_function(instance, "_start");
             if (start_func) {
                 if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
                     ereport(WARNING, errmsg("failed to run _start"));
@@ -745,11 +690,12 @@ on_readable() {
     }
     PG_FINALLY();
     {
-        if (exec_env)
-            wasm_runtime_destroy_exec_env(exec_env);
-
-        if (instance)
+        if (exec_env) {
+            wasm_module_inst_t instance =
+                wasm_exec_env_get_module_inst(exec_env);
             wasm_runtime_deinstantiate(instance);
+            wasm_runtime_destroy_exec_env(exec_env);
+        }
 
         if (spi_connected) {
             SPI_finish();
@@ -775,13 +721,9 @@ invalidate_cached_module(const char *module_name) {
     ereport(
         DEBUG1,
         (errmsg("rustica-%d: unload module \"%s\"", worker_id, module_name)));
-    wasm_module_t module = wasm_runtime_find_module_registered(module_name);
-    if (module) {
-        // since `wasm_runtime_unload` function does not call `aot_unload` when
-        // multi-modules is enabled, we have to call `aot_unload` directly here
-        aot_unload((AOTModule *)module);
-        wasm_runtime_unregister_module(module);
-    }
+    wasm_module_t module = rst_lookup_module(module_name);
+    if (module)
+        rst_free_module(module);
     if (strcmp(module_name, "main") == 0)
         free_app_plans();
 }

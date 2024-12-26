@@ -21,6 +21,12 @@
 
 #define BACKEND_HELLO "RUSTICA!"
 
+#define ERROR_BUF error_buf
+#define ERROR_BUF_PARAMS ERROR_BUF, ERROR_BUF##_size
+#define DECLARE_ERROR_BUF(size) \
+    char ERROR_BUF[size];       \
+    uint32 ERROR_BUF##_size = size;
+
 typedef struct FDMessage {
     struct msghdr msg;
     struct cmsghdr *cmsg;

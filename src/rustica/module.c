@@ -18,12 +18,19 @@
 #include "executor/spi.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
+
+#include "aot_runtime.h"
 
 #include "rustica/module.h"
+#include "rustica/utils.h"
 
 static SPIPlanPtr load_module_plan = NULL;
 static const char *load_module_sql =
     "SELECT bin_code FROM rustica.modules WHERE name = $1";
+
+static AOTModule *
+load_aot_module(const char *name, uint8 *bin_code, uint32_t bin_code_len);
 
 void
 rst_module_worker_startup() {
@@ -44,8 +51,9 @@ rst_module_worker_teardown() {
     SPI_freeplan(load_module_plan);
 }
 
-void
+wasm_module_t
 rst_load_module(const char *name, uint8 **buffer, uint32 *size) {
+    wasm_module_t module = NULL;
     Datum name_datum = CStringGetTextDatum(name);
 
     PG_TRY();
@@ -70,9 +78,17 @@ rst_load_module(const char *name, uint8 **buffer, uint32 *size) {
                                                         &isnull));
         Assert(!isnull);
 
-        *buffer = (uint8 *)VARDATA_ANY(bin_code);
-        *size = VARSIZE_ANY_EXHDR(bin_code);
-        Assert(*buffer != NULL);
+        if (buffer) {
+            Assert(size != NULL);
+            *buffer = (uint8 *)VARDATA_ANY(bin_code);
+            *size = VARSIZE_ANY_EXHDR(bin_code);
+            Assert(*buffer != NULL);
+        }
+        else {
+            module = load_aot_module(name,
+                                     (uint8 *)VARDATA_ANY(bin_code),
+                                     VARSIZE_ANY_EXHDR(bin_code));
+        }
     }
     PG_FINALLY();
     {
@@ -80,4 +96,87 @@ rst_load_module(const char *name, uint8 **buffer, uint32 *size) {
         debug_query_string = NULL;
     }
     PG_END_TRY();
+
+    return module;
+}
+
+wasm_module_t
+rst_lookup_module(const char *name) {
+    return wasm_runtime_find_module_registered(name);
+}
+
+void
+rst_free_module(wasm_module_t module) {
+    if (!module)
+        return;
+
+    wasm_runtime_unregister_module(module);
+    // since `wasm_runtime_unload` function does not call `aot_unload` when
+    // multi-modules is enabled, we have to call `aot_unload` directly here
+    aot_unload((AOTModule *)module);
+}
+
+wasm_exec_env_t
+rst_module_instantiate(wasm_module_t module,
+                       uint32 stack_size,
+                       uint32 heap_size) {
+    DECLARE_ERROR_BUF(128);
+
+    // Instantiate the WASM module
+    wasm_module_inst_t instance = wasm_runtime_instantiate(module,
+                                                           stack_size,
+                                                           heap_size,
+                                                           ERROR_BUF_PARAMS);
+    if (!instance)
+        ereport(ERROR, errmsg("failed to instantiate: %s", ERROR_BUF));
+
+    // Create WASM execution environment
+    wasm_exec_env_t exec_env =
+        wasm_runtime_create_exec_env(instance, stack_size);
+    if (!exec_env) {
+        wasm_runtime_deinstantiate(instance);
+        ereport(ERROR, errmsg("failed to instantiate WASM application"));
+    }
+
+    return exec_env;
+}
+
+static AOTModule *
+load_aot_module(const char *name, uint8 *bin_code, uint32_t bin_code_len) {
+    DECLARE_ERROR_BUF(128);
+
+    // Load the WASM module
+    LoadArgs load_args = { .name = (char *)name, .wasm_binary_freeable = true };
+    MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
+    wasm_module_t module = wasm_runtime_load_ex(bin_code,
+                                                bin_code_len,
+                                                &load_args,
+                                                ERROR_BUF_PARAMS);
+    if (!module) {
+        MemoryContextSwitchTo(tx_mctx);
+        ereport(
+            ERROR,
+            errmsg("bad WASM bin_code of module \"%s\": %s", name, ERROR_BUF));
+    }
+
+    // due to the lazy loading of `rtt_types` objects which are
+    // allocated in the module's instantiate phase and released with
+    // popping transactional memory context, potential crashes can
+    // occur. To resolve this issue, we preload all rtt_type objects
+    // within the TopMemoryContext.
+    AOTModule *aot_module = (AOTModule *)module;
+    for (uint32 i = 0; i < aot_module->type_count; i++) {
+        if (!wasm_rtt_type_new(aot_module->types[i],
+                               i,
+                               aot_module->rtt_types,
+                               aot_module->type_count,
+                               &aot_module->rtt_type_lock)) {
+            aot_unload(aot_module);
+            MemoryContextSwitchTo(tx_mctx);
+            ereport(ERROR, errmsg("create rtt object failed"));
+        }
+    }
+    wasm_runtime_register_module(name, module, ERROR_BUF_PARAMS);
+    MemoryContextSwitchTo(tx_mctx);
+    return aot_module;
 }
