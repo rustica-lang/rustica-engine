@@ -135,7 +135,7 @@ rst_module_instantiate(wasm_module_t module,
         wasm_runtime_create_exec_env(instance, stack_size);
     if (!exec_env) {
         wasm_runtime_deinstantiate(instance);
-        ereport(ERROR, errmsg("failed to instantiate WASM application"));
+        ereport(ERROR, errmsg("failed to instantiate: create exec env failed"));
     }
 
     return exec_env;
@@ -147,36 +147,59 @@ load_aot_module(const char *name, uint8 *bin_code, uint32_t bin_code_len) {
 
     // Load the WASM module
     LoadArgs load_args = { .name = (char *)name, .wasm_binary_freeable = true };
+    AOTModule *aot_module = NULL;
     MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
-    wasm_module_t module = wasm_runtime_load_ex(bin_code,
-                                                bin_code_len,
-                                                &load_args,
-                                                ERROR_BUF_PARAMS);
-    if (!module) {
-        MemoryContextSwitchTo(tx_mctx);
-        ereport(
-            ERROR,
-            errmsg("bad WASM bin_code of module \"%s\": %s", name, ERROR_BUF));
-    }
-
-    // due to the lazy loading of `rtt_types` objects which are
-    // allocated in the module's instantiate phase and released with
-    // popping transactional memory context, potential crashes can
-    // occur. To resolve this issue, we preload all rtt_type objects
-    // within the TopMemoryContext.
-    AOTModule *aot_module = (AOTModule *)module;
-    for (uint32 i = 0; i < aot_module->type_count; i++) {
-        if (!wasm_rtt_type_new(aot_module->types[i],
-                               i,
-                               aot_module->rtt_types,
-                               aot_module->type_count,
-                               &aot_module->rtt_type_lock)) {
-            aot_unload(aot_module);
-            MemoryContextSwitchTo(tx_mctx);
-            ereport(ERROR, errmsg("create rtt object failed"));
+    PG_TRY();
+    {
+        wasm_module_t module = wasm_runtime_load_ex(bin_code,
+                                                    bin_code_len,
+                                                    &load_args,
+                                                    ERROR_BUF_PARAMS);
+        if (!module)
+            ereport(ERROR,
+                    errmsg("bad WASM bin_code of module \"%s\": %s",
+                           name,
+                           ERROR_BUF));
+        if (module->module_type == Wasm_Module_Bytecode) {
+            wasm_unload((WASMModule *)module);
+            ereport(ERROR,
+                    errmsg("WASM bin_code of module \"%s\" is not AoT-compiled",
+                           name));
         }
+        Assert(module->module_type == Wasm_Module_AoT);
+        aot_module = (AOTModule *)module;
+
+        PG_TRY(2);
+        {
+            // due to the lazy loading of `rtt_types` objects which are
+            // allocated in the module's instantiate phase and released with
+            // popping transactional memory context, potential crashes can
+            // occur. To resolve this issue, we preload all rtt_type objects
+            // within the TopMemoryContext.
+            for (uint32 i = 0; i < aot_module->type_count; i++) {
+                if (!wasm_rtt_type_new(aot_module->types[i],
+                                       i,
+                                       aot_module->rtt_types,
+                                       aot_module->type_count,
+                                       &aot_module->rtt_type_lock))
+                    ereport(ERROR, errmsg("create rtt object failed"));
+            }
+            if (!wasm_runtime_register_module(name, module, ERROR_BUF_PARAMS))
+                ereport(ERROR,
+                        errmsg("cannot register module \"%s\": %s",
+                               name,
+                               ERROR_BUF));
+        }
+        PG_CATCH(2);
+        {
+            aot_unload(aot_module);
+            PG_RE_THROW();
+        }
+        PG_END_TRY(2);
     }
-    wasm_runtime_register_module(name, module, ERROR_BUF_PARAMS);
-    MemoryContextSwitchTo(tx_mctx);
+    PG_FINALLY();
+    { MemoryContextSwitchTo(tx_mctx); }
+    PG_END_TRY();
+
     return aot_module;
 }
