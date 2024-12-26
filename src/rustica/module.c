@@ -20,14 +20,15 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 
-#include "aot_runtime.h"
-
 #include "rustica/module.h"
 #include "rustica/utils.h"
 
 static SPIPlanPtr load_module_plan = NULL;
 static const char *load_module_sql =
     "SELECT bin_code FROM rustica.modules WHERE name = $1";
+
+static PreparedModule *
+create_module(const char *name);
 
 static AOTModule *
 load_aot_module(const char *name, uint8 *bin_code, uint32_t bin_code_len);
@@ -51,44 +52,71 @@ rst_module_worker_teardown() {
     SPI_freeplan(load_module_plan);
 }
 
-wasm_module_t
-rst_load_module(const char *name, uint8 **buffer, uint32 *size) {
-    wasm_module_t module = NULL;
+PreparedModule *
+rst_prepare_module(const char *name, uint8 **buffer, uint32 *size) {
+    // We use wasm_module_t->name as a pointer to PreparedModule which starts
+    // with maximum-128 chars of name, so we had to limit the name length here.
+    if (strlen(name) > RST_MODULE_NAME_MAXLEN)
+        ereport(ERROR,
+                errmsg("module name too long (%ld bytes): maximum %d bytes",
+                       strlen(name),
+                       RST_MODULE_NAME_MAXLEN));
+
+    PreparedModule *pmod = NULL;
+    SPITupleTable *tuptable = NULL;
     Datum name_datum = CStringGetTextDatum(name);
 
     PG_TRY();
     {
-        debug_query_string = load_module_sql;
-        int ret =
-            SPI_execute_plan(load_module_plan, &name_datum, NULL, true, 1);
-        if (ret != SPI_OK_SELECT)
-            ereport(ERROR,
-                    errmsg("failed to load module \"%s\": %s",
-                           name,
-                           SPI_result_code_string(ret)));
-        if (SPI_processed == 0)
-            ereport(ERROR,
-                    errcode(ERRCODE_NO_DATA_FOUND),
-                    errmsg("module \"%s\" doesn't exist", name));
+        PG_TRY(2);
+        {
+            // Create the PreparedModule with all pre-compiled queries
+            pmod = create_module(name);
 
-        bool isnull;
-        bytea *bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
-                                                        SPI_tuptable->tupdesc,
-                                                        1,
-                                                        &isnull));
-        Assert(!isnull);
+            // Query the rustica.modules table
+            debug_query_string = load_module_sql;
+            int ret =
+                SPI_execute_plan(load_module_plan, &name_datum, NULL, true, 1);
+            if (ret != SPI_OK_SELECT)
+                ereport(ERROR,
+                        errmsg("failed to load module \"%s\": %s",
+                               name,
+                               SPI_result_code_string(ret)));
+            tuptable = SPI_tuptable;
+            if (SPI_processed == 0)
+                ereport(ERROR,
+                        errcode(ERRCODE_NO_DATA_FOUND),
+                        errmsg("module \"%s\" doesn't exist", name));
 
-        if (buffer) {
-            Assert(size != NULL);
-            *buffer = (uint8 *)VARDATA_ANY(bin_code);
-            *size = VARSIZE_ANY_EXHDR(bin_code);
-            Assert(*buffer != NULL);
+            // Take out the raw data from the tuptable
+            bool isnull;
+            Datum datum =
+                SPI_getbinval(tuptable->vals[0], tuptable->tupdesc, 1, &isnull);
+            Assert(!isnull);
+            bytea *bin_code = DatumGetByteaPP(datum);
+            debug_query_string = NULL;
+
+            if (buffer) {
+                Assert(size != NULL);
+                *buffer = (uint8 *)VARDATA_ANY(bin_code);
+                *size = VARSIZE_ANY_EXHDR(bin_code);
+                pmod->loading_tuptable = tuptable;
+            }
+            else {
+                pmod->module = load_aot_module((const char *)pmod,
+                                               (uint8 *)VARDATA_ANY(bin_code),
+                                               VARSIZE_ANY_EXHDR(bin_code));
+                SPI_freetuptable(tuptable);
+                tuptable = NULL;
+            }
         }
-        else {
-            module = load_aot_module(name,
-                                     (uint8 *)VARDATA_ANY(bin_code),
-                                     VARSIZE_ANY_EXHDR(bin_code));
+        PG_CATCH(2);
+        {
+            rst_free_module(pmod);
+            SPI_freetuptable(tuptable);
+            PG_RE_THROW();
         }
+        PG_END_TRY(2);
     }
     PG_FINALLY();
     {
@@ -97,48 +125,73 @@ rst_load_module(const char *name, uint8 **buffer, uint32 *size) {
     }
     PG_END_TRY();
 
-    return module;
+    return pmod;
 }
 
-wasm_module_t
+PreparedModule *
 rst_lookup_module(const char *name) {
-    return wasm_runtime_find_module_registered(name);
+    wasm_module_t module = wasm_runtime_find_module_registered(name);
+    if (module)
+        return (PreparedModule *)wasm_runtime_get_module_name(module);
+    else
+        return NULL;
 }
 
 void
-rst_free_module(wasm_module_t module) {
-    if (!module)
+rst_free_module(PreparedModule *pmod) {
+    if (!pmod)
         return;
 
-    wasm_runtime_unregister_module(module);
-    // since `wasm_runtime_unload` function does not call `aot_unload` when
-    // multi-modules is enabled, we have to call `aot_unload` directly here
-    aot_unload((AOTModule *)module);
+    if (pmod->module) {
+        wasm_runtime_unregister_module((wasm_module_t)pmod->module);
+        aot_unload(pmod->module);
+    }
+    if (pmod->loading_tuptable)
+        SPI_freetuptable(pmod->loading_tuptable);
+    pfree(pmod);
 }
 
 wasm_exec_env_t
-rst_module_instantiate(wasm_module_t module,
+rst_module_instantiate(PreparedModule *pmod,
                        uint32 stack_size,
                        uint32 heap_size) {
     DECLARE_ERROR_BUF(128);
 
     // Instantiate the WASM module
-    wasm_module_inst_t instance = wasm_runtime_instantiate(module,
-                                                           stack_size,
-                                                           heap_size,
-                                                           ERROR_BUF_PARAMS);
+    wasm_module_inst_t instance =
+        wasm_runtime_instantiate((wasm_module_t)pmod->module,
+                                 stack_size,
+                                 heap_size,
+                                 ERROR_BUF_PARAMS);
     if (!instance)
-        ereport(ERROR, errmsg("failed to instantiate: %s", ERROR_BUF));
+        ereport(ERROR,
+                errmsg("failed to instantiate module \"%s\": %s",
+                       pmod->name,
+                       ERROR_BUF));
 
     // Create WASM execution environment
     wasm_exec_env_t exec_env =
         wasm_runtime_create_exec_env(instance, stack_size);
     if (!exec_env) {
         wasm_runtime_deinstantiate(instance);
-        ereport(ERROR, errmsg("failed to instantiate: create exec env failed"));
+        ereport(
+            ERROR,
+            errmsg(
+                "failed to instantiate module \"%s\": create exec env failed",
+                pmod->name));
     }
 
     return exec_env;
+}
+
+static PreparedModule *
+create_module(const char *name) {
+    PreparedModule *pmod =
+        (PreparedModule *)MemoryContextAllocZero(TopMemoryContext,
+                                                 sizeof(PreparedModule));
+    memcpy(pmod->name, name, strlen(name));
+
+    return pmod;
 }
 
 static AOTModule *
@@ -171,7 +224,7 @@ load_aot_module(const char *name, uint8 *bin_code, uint32_t bin_code_len) {
 
         PG_TRY(2);
         {
-            // due to the lazy loading of `rtt_types` objects which are
+            // Due to the lazy loading of `rtt_types` objects which are
             // allocated in the module's instantiate phase and released with
             // popping transactional memory context, potential crashes can
             // occur. To resolve this issue, we preload all rtt_type objects
@@ -182,7 +235,7 @@ load_aot_module(const char *name, uint8 *bin_code, uint32_t bin_code_len) {
                                        aot_module->rtt_types,
                                        aot_module->type_count,
                                        &aot_module->rtt_type_lock))
-                    ereport(ERROR, errmsg("create rtt object failed"));
+                    ereport(ERROR, errmsg("failed to create rtt object"));
             }
             if (!wasm_runtime_register_module(name, module, ERROR_BUF_PARAMS))
                 ereport(ERROR,

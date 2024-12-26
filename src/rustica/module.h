@@ -17,7 +17,18 @@
 #ifndef RUSTICA_MODULE_H
 #define RUSTICA_MODULE_H
 
-#include "wasm_runtime_common.h"
+#include "postgres.h"
+#include "executor/spi.h"
+
+#include "aot_runtime.h"
+
+#define RST_MODULE_NAME_MAXLEN 127
+
+typedef struct PreparedModule {
+    char name[RST_MODULE_NAME_MAXLEN + 1];
+    AOTModule *module;
+    SPITupleTable *loading_tuptable;
+} PreparedModule;
 
 void
 rst_module_worker_startup();
@@ -25,17 +36,17 @@ rst_module_worker_startup();
 void
 rst_module_worker_teardown();
 
-wasm_module_t
-rst_load_module(const char *name, uint8 **buffer, uint32 *size);
+PreparedModule *
+rst_prepare_module(const char *name, uint8 **buffer, uint32 *size);
 
-wasm_module_t
+PreparedModule *
 rst_lookup_module(const char *name);
 
 void
-rst_free_module(wasm_module_t module);
+rst_free_module(PreparedModule *pmod);
 
 wasm_exec_env_t
-rst_module_instantiate(wasm_module_t module,
+rst_module_instantiate(PreparedModule *pmod,
                        uint32 stack_size,
                        uint32 heap_size);
 

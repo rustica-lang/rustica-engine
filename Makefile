@@ -260,6 +260,7 @@ $(WAMR_DIR)/.stub: $(WAMR_TARBALL)
 	patch -p1 -d $(WAMR_DIR) < patches/0001-Support-circular-calls-when-multi-module-enabled.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0002-wamrc-allow-building-without-DUMP_CALL_STACK.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0003-fix-parameter-handling-in-wasm_loader-with-GC-enable.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0004-Tweak-submodule-loading-hooks.patch
 	echo > $(WAMR_DIR)/.stub
 ifeq ($(BUNDLE_LLVM),1)
 	cd $(WAMR_DIR)/wamr-compiler && python3 -m pip install -r ../build-scripts/requirements.txt && python3 ../build-scripts/build_llvm.py

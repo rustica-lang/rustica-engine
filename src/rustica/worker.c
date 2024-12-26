@@ -23,9 +23,9 @@
 #include "libpq/pqformat.h"
 #include "access/xact.h"
 #include "commands/async.h"
+#include "tcop/utility.h"
 #include "utils/snapmgr.h"
 #include "pgstat.h"
-#include "tcop/utility.h"
 #include "llhttp.h"
 
 #include "rustica/gucs.h"
@@ -365,16 +365,38 @@ on_message_complete(llhttp_t *p) {
 
 static bool
 wasm_module_reader_callback(package_type_t module_type,
-                            const char *module_name,
+                            LoadArgs *load_args,
                             uint8 **p_buffer,
                             uint32 *p_size) {
     ereport(LOG,
             (errmsg("wasm_module_reader_callback: load WASM dependency \"%s\"",
-                    module_name)));
+                    load_args->name)));
     pgstat_report_activity(STATE_RUNNING, "loading WASM dependency");
 
-    rst_load_module(module_name, p_buffer, p_size);
+    bool rv;
+    PG_TRY();
+    {
+        load_args->name =
+            (char *)rst_prepare_module(load_args->name, p_buffer, p_size);
+        load_args->wasm_binary_freeable = true;
+        rv = true;
+    }
+    PG_CATCH();
+    {
+        EmitErrorReport();
+        rv = false;
+    }
+    PG_END_TRY();
+    return rv;
+}
 
+static bool
+wasm_module_completer_callback(wasm_module_t module) {
+    PreparedModule *pmod =
+        (PreparedModule *)wasm_runtime_get_module_name(module);
+    pmod->module = (AOTModule *)module;
+    SPI_freetuptable(pmod->loading_tuptable);
+    pmod->loading_tuptable = NULL;
     return true;
 }
 
@@ -437,6 +459,7 @@ startup() {
         ereport(FATAL,
                 (errmsg("rustica-%d: could not register natives", worker_id)));
     wasm_runtime_set_module_reader(wasm_module_reader_callback,
+                                   wasm_module_completer_callback,
                                    wasm_module_destroyer_callback);
 }
 
@@ -575,8 +598,7 @@ static inline void
 on_readable() {
     // Take a job from the FD channel
     if (recvmsg(sock, &fd_msg.msg, 0) < 0) {
-        ereport(FATAL,
-                (errmsg("rustica-%d: failed to recvmsg: %m", worker_id)));
+        ereport(FATAL, errmsg("rustica-%d: failed to recvmsg: %m", worker_id));
     }
     pgsocket client = *((int *)CMSG_DATA(fd_msg.cmsg));
     ereport(DEBUG1,
@@ -604,19 +626,19 @@ on_readable() {
 
             // Load module if it's not loaded already
             const char *name = "main";
-            wasm_module_t module = rst_lookup_module(name);
-            if (module == NULL) {
+            PreparedModule *pmod = rst_lookup_module(name);
+            if (!pmod) {
                 pgstat_report_activity(STATE_RUNNING,
                                        "loading WASM application");
                 ereport(
                     DEBUG1,
                     errmsg("rustica-%d: load module \"%s\"", worker_id, name));
-                module = rst_load_module(name, NULL, NULL);
+                pmod = rst_prepare_module(name, NULL, NULL);
             }
 
             // Instantiate the WASM module
             pgstat_report_activity(STATE_RUNNING, "running WASM application");
-            exec_env = rst_module_instantiate(module, 256 * 1024, 1024 * 1024);
+            exec_env = rst_module_instantiate(pmod, 256 * 1024, 1024 * 1024);
 
             // Prepare context for execution
             Context context = { .fd = client };
@@ -721,7 +743,7 @@ invalidate_cached_module(const char *module_name) {
     ereport(
         DEBUG1,
         (errmsg("rustica-%d: unload module \"%s\"", worker_id, module_name)));
-    wasm_module_t module = rst_lookup_module(module_name);
+    PreparedModule *module = rst_lookup_module(module_name);
     if (module)
         rst_free_module(module);
     if (strcmp(module_name, "main") == 0)
