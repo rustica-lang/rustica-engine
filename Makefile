@@ -106,6 +106,7 @@ OBJS = \
 	src/rustica/main.o \
 	src/rustica/gucs.o \
 	src/rustica/event_set.o \
+	src/rustica/module.o \
 	src/rustica/worker.o \
 	src/rustica/spi.o \
 	src/rustica/wamr.o \

@@ -23,8 +23,6 @@
 #include "libpq/pqformat.h"
 #include "access/xact.h"
 #include "commands/async.h"
-#include "executor/spi.h"
-#include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "pgstat.h"
@@ -33,6 +31,7 @@
 #include "llhttp.h"
 
 #include "rustica/gucs.h"
+#include "rustica/module.h"
 #include "rustica/utils.h"
 #include "rustica/spi.h"
 #include "rustica/wamr.h"
@@ -48,9 +47,6 @@ static bool notify_received = false;
 static char state = WAIT_WRITE;
 static int sent = 0;
 static FDMessage fd_msg;
-static SPIPlanPtr load_module_plan = NULL;
-static const char *load_module_sql =
-    "SELECT bin_code FROM rustica.modules WHERE name = $1";
 
 static int32_t
 env_recv(wasm_exec_env_t exec_env,
@@ -374,40 +370,13 @@ wasm_module_reader_callback(package_type_t module_type,
                             const char *module_name,
                             uint8 **p_buffer,
                             uint32 *p_size) {
-    Datum name_datum;
-    int ret;
-    bool isnull;
-    bytea *bin_code;
-
     ereport(LOG,
             (errmsg("wasm_module_reader_callback: load WASM dependency \"%s\"",
                     module_name)));
     pgstat_report_activity(STATE_RUNNING, "loading WASM dependency");
 
-    name_datum = CStringGetTextDatum(module_name);
-    debug_query_string = load_module_sql;
-    ret = SPI_execute_plan(load_module_plan, &name_datum, NULL, true, 1);
+    rst_load_module(module_name, p_buffer, p_size);
 
-    if (ret != SPI_OK_SELECT) {
-        ereport(ERROR, (errmsg("SPI_execute_plan failed: error code %d", ret)));
-        pg_unreachable();
-    }
-
-    if (SPI_processed == 0) {
-        ereport(ERROR, (errmsg("Dependency '%s' not found", module_name)));
-        pg_unreachable();
-    }
-
-    bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
-                                             SPI_tuptable->tupdesc,
-                                             1,
-                                             &isnull));
-    debug_query_string = NULL;
-    Assert(!isnull);
-
-    *p_size = VARSIZE_ANY_EXHDR(bin_code);
-    *p_buffer = (uint8 *)VARDATA_ANY(bin_code);
-    Assert(*p_buffer != NULL);
     return true;
 }
 
@@ -457,20 +426,8 @@ startup() {
 
         Async_Listen("rustica_module_cache_invalidation");
 
-        debug_query_string = load_module_sql;
-        load_module_plan = SPI_prepare(load_module_sql, 1, (Oid[1]){ TEXTOID });
+        rst_module_worker_startup();
 
-        if (!load_module_plan) {
-            ereport(ERROR,
-                    (errmsg("could not prepare SPI plan: %s",
-                            SPI_result_code_string(SPI_result))));
-        }
-
-        if (SPI_keepplan(load_module_plan)) {
-            ereport(ERROR, (errmsg("failed to keep plan")));
-        }
-
-        debug_query_string = NULL;
         SPI_finish();
         CommitTransactionCommand();
     }
@@ -619,10 +576,6 @@ init_pg(Context *ctx, wasm_module_inst_t instance) {
 static inline void
 on_readable() {
     pgsocket client;
-    Datum name_datum;
-    int ret;
-    bool isnull;
-    bytea *bin_code;
     LoadArgs load_args = { 0 };
     char error_buf[128];
     wasm_module_t module;
@@ -658,37 +611,24 @@ on_readable() {
             spi_connected = true;
 
             // Load module if it's not loaded already
-            module = wasm_runtime_find_module_registered("main");
+            const char *name = "main";
+            module = wasm_runtime_find_module_registered(name);
             if (module == NULL) {
                 pgstat_report_activity(STATE_RUNNING,
                                        "loading WASM application");
                 ereport(
                     DEBUG1,
-                    (errmsg("rustica-%d: load module \"main\"", worker_id)));
-                name_datum = CStringGetTextDatum("main");
-                debug_query_string = load_module_sql;
-                ret = SPI_execute_plan(load_module_plan,
-                                       &name_datum,
-                                       NULL,
-                                       true,
-                                       1);
-                if (ret != SPI_OK_SELECT || SPI_processed == 0)
-                    ereport(ERROR,
-                            errcode(ERRCODE_NO_DATA_FOUND),
-                            errmsg("can't find main module"));
-
-                bin_code = DatumGetByteaPP(SPI_getbinval(SPI_tuptable->vals[0],
-                                                         SPI_tuptable->tupdesc,
-                                                         1,
-                                                         &isnull));
-                debug_query_string = NULL;
+                    errmsg("rustica-%d: load module \"%s\"", worker_id, name));
+                uint8 *buffer;
+                uint32 size;
+                rst_load_module(name, &buffer, &size);
 
                 load_args.name = "";
                 load_args.wasm_binary_freeable = true;
 
                 MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
-                module = wasm_runtime_load_ex((uint8 *)VARDATA_ANY(bin_code),
-                                              VARSIZE_ANY_EXHDR(bin_code),
+                module = wasm_runtime_load_ex(buffer,
+                                              size,
                                               &load_args,
                                               error_buf,
                                               sizeof(error_buf));
@@ -713,7 +653,7 @@ on_readable() {
                         ereport(ERROR, errmsg("create rtt object failed"));
                     }
                 }
-                wasm_runtime_register_module("main",
+                wasm_runtime_register_module(name,
                                              module,
                                              error_buf,
                                              sizeof(error_buf));
@@ -815,7 +755,6 @@ on_readable() {
             SPI_finish();
             PopActiveSnapshot();
             CommitTransactionCommand();
-            debug_query_string = NULL;
             pgstat_report_stat(true);
             pgstat_report_activity(STATE_IDLE, NULL);
             tuptables_size = 0;
@@ -925,7 +864,7 @@ main_loop() {
 
 static void
 teardown() {
-    SPI_freeplan(load_module_plan);
+    rst_module_worker_teardown();
     FreeWaitEventSet(wait_set);
     StreamClose(sock);
     sock = PGINVALID_SOCKET;
