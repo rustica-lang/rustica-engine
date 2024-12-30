@@ -35,7 +35,7 @@ rst_compile(PG_FUNCTION_ARGS) {
     aot_comp_context_t comp_ctx = NULL;
     AOTCompOption option = { 0 };
     option.opt_level = 3;
-    option.size_level = 0;
+    option.size_level = 3;
     option.output_format = AOT_FORMAT_FILE;
     option.bounds_checks = 2;
     option.stack_bounds_checks = 2;
