@@ -27,6 +27,13 @@
 
 #include "wasm_runtime_common.h"
 
+#define RST_WASM_TO_PG_ARGS wasm_exec_env_t exec_env, const wasm_value_t value
+#define RST_WASM_TO_PG_RET Datum
+#define RST_PG_TO_WASM_ARGS                                          \
+    Datum value, wasm_struct_obj_t tuptable, uint32 row, uint32 col, \
+        wasm_exec_env_t exec_env, uint32 type_idx
+#define RST_PG_TO_WASM_RET wasm_value_t
+
 typedef struct Context {
     WaitEventSet *wait_set;
     pgsocket fd;
@@ -58,13 +65,9 @@ typedef struct Context {
     wasm_function_inst_t as_raw_datum;
 } Context;
 
-typedef Datum (*WASM2PGFunc)(wasm_exec_env_t exec_env, wasm_value_t value);
-typedef wasm_value_t (*PG2WASMFunc)(Datum value,
-                                    WASMStructObjectRef tuptable,
-                                    uint32 row,
-                                    uint32 col,
-                                    wasm_exec_env_t exec_env,
-                                    uint32 type_idx);
+typedef RST_WASM_TO_PG_RET (*WASM2PGFunc)(RST_WASM_TO_PG_ARGS);
+typedef RST_PG_TO_WASM_RET (*PG2WASMFunc)(RST_PG_TO_WASM_ARGS);
+
 typedef struct AppPlan {
     char *sql;
     SPIPlanPtr plan;

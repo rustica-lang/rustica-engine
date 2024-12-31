@@ -188,29 +188,28 @@ get_tuple_table_value(int32_t tuptable_idx, int32_t row, int32_t col) {
     return pg_value;
 }
 
-static Datum
-wasm_i32_to_pg_bool(wasm_exec_env_t exec_env, const wasm_value_t value) {
+static RST_WASM_TO_PG_RET
+wasm_i32_to_pg_bool(RST_WASM_TO_PG_ARGS) {
     return (Datum)(value.i32 ? 1 : 0);
 }
 
-static Datum
-wasm_i32_to_pg_i32(wasm_exec_env_t exec_env, const wasm_value_t value) {
+static RST_WASM_TO_PG_RET
+wasm_i32_to_pg_i32(RST_WASM_TO_PG_ARGS) {
     return (Datum)value.i32;
 }
 
-static Datum
-wasm_i64_to_pg_i64(wasm_exec_env_t exec_env, const wasm_value_t value) {
+static RST_WASM_TO_PG_RET
+wasm_i64_to_pg_i64(RST_WASM_TO_PG_ARGS) {
     return (Datum)value.i64;
 }
 
-static Datum
-wasm_bytes_to_pg_text(wasm_exec_env_t exec_env, const wasm_value_t value) {
+static RST_WASM_TO_PG_RET
+wasm_bytes_to_pg_text(RST_WASM_TO_PG_ARGS) {
     return CStringGetTextDatum(wasm_array_obj_first_elem_addr(value.data));
 }
 
-static Datum
-wasm_bytest_to_pg_timestamp(wasm_exec_env_t exec_env,
-                            const wasm_value_t value) {
+static RST_WASM_TO_PG_RET
+wasm_bytest_to_pg_timestamp(RST_WASM_TO_PG_ARGS) {
     return DirectFunctionCall3(
         timestamp_in,
         CStringGetDatum(wasm_array_obj_first_elem_addr(value.data)),
@@ -218,8 +217,8 @@ wasm_bytest_to_pg_timestamp(wasm_exec_env_t exec_env,
         Int32GetDatum(-1));
 }
 
-static Datum
-wasm_as_datum_to_pg_value(wasm_exec_env_t exec_env, const wasm_value_t value) {
+static RST_WASM_TO_PG_RET
+wasm_as_datum_to_pg_value(RST_WASM_TO_PG_ARGS) {
     Context *ctx = wasm_runtime_get_user_data(exec_env);
 
     wasm_val_t args[1] = { { .kind = WASM_EXTERNREF,
@@ -239,49 +238,29 @@ wasm_as_datum_to_pg_value(wasm_exec_env_t exec_env, const wasm_value_t value) {
     return get_tuple_table_value(tuple_table_idx.i32, row.i32, col.i32);
 }
 
-static wasm_value_t
-pg_bool_to_wasm_i32(Datum value,
-                    WASMStructObjectRef tuptable,
-                    uint32 row,
-                    uint32 col,
-                    wasm_exec_env_t exec_env,
-                    uint32 type_idx) {
+static RST_PG_TO_WASM_RET
+pg_bool_to_wasm_i32(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value;
     wasm_value.i32 = DatumGetBool(value);
     return wasm_value;
 }
 
-static wasm_value_t
-pg_i32_to_wasm_i32(Datum value,
-                   WASMStructObjectRef tuptable,
-                   uint32 row,
-                   uint32 col,
-                   wasm_exec_env_t exec_env,
-                   uint32 type_idx) {
+static RST_PG_TO_WASM_RET
+pg_i32_to_wasm_i32(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value;
     wasm_value.i32 = DatumGetInt32(value);
     return wasm_value;
 }
 
-static wasm_value_t
-pg_i64_to_wasm_i64(Datum value,
-                   WASMStructObjectRef tuptable,
-                   uint32 row,
-                   uint32 col,
-                   wasm_exec_env_t exec_env,
-                   uint32 type_idx) {
+static RST_PG_TO_WASM_RET
+pg_i64_to_wasm_i64(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value;
     wasm_value.i64 = DatumGetInt64(value);
     return wasm_value;
 }
 
-static wasm_value_t
-pg_text_to_wasm_bytes(Datum value,
-                      WASMStructObjectRef tuptable,
-                      uint32 row,
-                      uint32 col,
-                      wasm_exec_env_t exec_env,
-                      uint32 type_idx) {
+static RST_PG_TO_WASM_RET
+pg_text_to_wasm_bytes(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value;
     text *text_ptr = DatumGetTextPP(value);
     uint32_t size = VARSIZE_ANY_EXHDR(text_ptr) + 1;
@@ -293,13 +272,8 @@ pg_text_to_wasm_bytes(Datum value,
     return wasm_value;
 }
 
-static wasm_value_t
-pg_timestamp_to_wasm_bytes(Datum value,
-                           WASMStructObjectRef tuptable,
-                           uint32 row,
-                           uint32 col,
-                           wasm_exec_env_t exec_env,
-                           uint32 type_idx) {
+static RST_PG_TO_WASM_RET
+pg_timestamp_to_wasm_bytes(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value;
     char *data = DatumGetCString(DirectFunctionCall1(timestamp_out, value));
     uint32_t size = strlen(data);
@@ -311,13 +285,8 @@ pg_timestamp_to_wasm_bytes(Datum value,
     return wasm_value;
 }
 
-static wasm_value_t
-pg_value_to_wasm_as_datum(Datum value,
-                          WASMStructObjectRef tuptable,
-                          uint32 row,
-                          uint32 col,
-                          wasm_exec_env_t exec_env,
-                          uint32 type_idx) {
+static RST_PG_TO_WASM_RET
+pg_value_to_wasm_as_datum(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value;
     WASMStructObjectRef datum_obj =
         wasm_struct_obj_new_with_typeidx(exec_env, type_idx);
