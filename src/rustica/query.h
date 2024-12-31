@@ -14,8 +14,8 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#ifndef RUSTICA_SPI_H
-#define RUSTICA_SPI_H
+#ifndef RUSTICA_QUERY_H
+#define RUSTICA_QUERY_H
 
 #include <sys/socket.h>
 
@@ -94,4 +94,4 @@ env_detoast(wasm_exec_env_t exec_env,
             int32_t row,
             int32_t col);
 
-#endif /* RUSTICA_SPI_H */
+#endif /* RUSTICA_QUERY_H */

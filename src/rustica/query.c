@@ -23,7 +23,7 @@
 #include "wasm_runtime_common.h"
 #include "aot_runtime.h"
 
-#include "rustica/spi.h"
+#include "rustica/query.h"
 
 AppPlan *app_plans = NULL;
 static int app_plans_size = 0;

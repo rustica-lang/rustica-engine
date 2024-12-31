@@ -30,8 +30,8 @@
 
 #include "rustica/gucs.h"
 #include "rustica/module.h"
+#include "rustica/query.h"
 #include "rustica/utils.h"
-#include "rustica/spi.h"
 #include "rustica/wamr.h"
 
 #define WAIT_WRITE 0

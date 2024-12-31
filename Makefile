@@ -108,7 +108,7 @@ OBJS = \
 	src/rustica/event_set.o \
 	src/rustica/module.o \
 	src/rustica/worker.o \
-	src/rustica/spi.o \
+	src/rustica/query.o \
 	src/rustica/wamr.o \
 	src/rustica/utils.o \
 	src/rustica/master.o
