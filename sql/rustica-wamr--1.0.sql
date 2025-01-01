@@ -16,15 +16,42 @@
 
 CREATE SCHEMA rustica;
 
-CREATE FUNCTION rustica.compile_wasm(bytea) RETURNS bytea
-AS 'MODULE_PATHNAME'
-LANGUAGE C STRICT;
-
 CREATE TABLE rustica.modules(
     name text PRIMARY KEY,
     byte_code bytea NOT NULL,
-    bin_code bytea NOT NULL
+    bin_code bytea NOT NULL,
+    heap_types int[] NOT NULL
 );
+
+CREATE TABLE rustica.queries(
+    module text NOT NULL,  -- 0
+    index int NOT NULL, -- 1
+    sql text NOT NULL,  -- 2
+
+    arg_type bigint NOT NULL,  -- 3
+    arg_oids oid[] NOT NULL,  -- 4
+    arg_field_types bigint[] NOT NULL,  -- 5
+    arg_field_fn int[] NOT NULL,  -- 6
+
+    ret_type bigint[] NOT NULL,  -- 7
+    ret_oids oid[] NOT NULL,  -- 8
+    ret_field_types bigint[] NOT NULL,  -- 9
+    ret_field_fn int[] NOT NULL,  -- 10
+
+    PRIMARY KEY (module, index),
+    FOREIGN KEY (module) REFERENCES rustica.modules(name)
+);
+
+CREATE TYPE rustica.compile_result AS (
+    bin_code bytea,
+    heap_types int[],
+    queries rustica.queries[]
+);
+
+CREATE FUNCTION rustica.compile_wasm(bytea)
+    RETURNS rustica.compile_result
+    AS 'MODULE_PATHNAME'
+    LANGUAGE C STRICT;
 
 CREATE OR REPLACE FUNCTION rustica.invalidate_module_cache() RETURNS TRIGGER AS $$
     BEGIN

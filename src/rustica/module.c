@@ -24,11 +24,17 @@
 #include "rustica/utils.h"
 
 static SPIPlanPtr load_module_plan = NULL;
+static SPIPlanPtr load_module_queries_plan = NULL;
 static const char *load_module_sql =
-    "SELECT bin_code FROM rustica.modules WHERE name = $1";
+    "SELECT bin_code, heap_types FROM rustica.modules WHERE name = $1";
+static const char *load_module_queries_sql =
+    "SELECT * FROM rustica.queries WHERE module = $1 ORDER BY index";
 
 static PreparedModule *
-create_module(const char *name);
+create_module_with_queries(Datum name);
+
+static void
+load_heap_types(ArrayType *array, CommonHeapTypes *heap_types);
 
 static AOTModule *
 load_aot_module(const char *name, uint8 *bin_code, uint32_t bin_code_len);
@@ -37,19 +43,29 @@ void
 rst_module_worker_startup() {
     debug_query_string = load_module_sql;
     load_module_plan = SPI_prepare(load_module_sql, 1, (Oid[1]){ TEXTOID });
-
     if (!load_module_plan)
         ereport(ERROR,
                 errmsg("could not prepare SPI plan: %s",
                        SPI_result_code_string(SPI_result)));
     if (SPI_keepplan(load_module_plan))
         ereport(ERROR, errmsg("failed to keep plan"));
+
+    debug_query_string = load_module_queries_sql;
+    load_module_queries_plan =
+        SPI_prepare(load_module_queries_sql, 1, (Oid[1]){ TEXTOID });
+    if (!load_module_queries_plan)
+        ereport(ERROR,
+                (errmsg("could not prepare SPI plan: %s",
+                        SPI_result_code_string(SPI_result))));
+    if (SPI_keepplan(load_module_queries_plan))
+        ereport(ERROR, (errmsg("failed to keep plan")));
     debug_query_string = NULL;
 }
 
 void
 rst_module_worker_teardown() {
     SPI_freeplan(load_module_plan);
+    SPI_freeplan(load_module_queries_plan);
 }
 
 PreparedModule *
@@ -71,7 +87,7 @@ rst_prepare_module(const char *name, uint8 **buffer, uint32 *size) {
         PG_TRY(2);
         {
             // Create the PreparedModule with all pre-compiled queries
-            pmod = create_module(name);
+            pmod = create_module_with_queries(name_datum);
 
             // Query the rustica.modules table
             debug_query_string = load_module_sql;
@@ -94,8 +110,14 @@ rst_prepare_module(const char *name, uint8 **buffer, uint32 *size) {
                 SPI_getbinval(tuptable->vals[0], tuptable->tupdesc, 1, &isnull);
             Assert(!isnull);
             bytea *bin_code = DatumGetByteaPP(datum);
+            datum =
+                SPI_getbinval(tuptable->vals[0], tuptable->tupdesc, 2, &isnull);
+            Assert(!isnull);
+            ArrayType *heap_types = DatumGetArrayTypeP(datum);
             debug_query_string = NULL;
 
+            // Load heap_types and the actual WASM module
+            load_heap_types(heap_types, &pmod->heap_types);
             if (buffer) {
                 Assert(size != NULL);
                 *buffer = (uint8 *)VARDATA_ANY(bin_code);
@@ -141,7 +163,8 @@ void
 rst_free_module(PreparedModule *pmod) {
     if (!pmod)
         return;
-
+    for (int i = 0; i < pmod->nqueries; i++)
+        rst_free_query_plan(&pmod->queries[i]);
     if (pmod->module) {
         wasm_runtime_unregister_module((wasm_module_t)pmod->module);
         aot_unload(pmod->module);
@@ -185,13 +208,81 @@ rst_module_instantiate(PreparedModule *pmod,
 }
 
 static PreparedModule *
-create_module(const char *name) {
-    PreparedModule *pmod =
-        (PreparedModule *)MemoryContextAllocZero(TopMemoryContext,
-                                                 sizeof(PreparedModule));
-    memcpy(pmod->name, name, strlen(name));
+create_module_with_queries(Datum name) {
+    // Load pre-compiled queries
+    debug_query_string = load_module_queries_sql;
+    int ret = SPI_execute_plan(load_module_queries_plan, &name, NULL, true, 0);
+    if (ret != SPI_OK_SELECT)
+        ereport(ERROR,
+                errmsg("failed to load module queries: %s",
+                       SPI_result_code_string(ret)));
+    SPITupleTable *tuptable = SPI_tuptable;
+    Assert(tuptable->tupdesc->natts == 12);
+    debug_query_string = NULL;
+
+    // Construct the PreparedModule in TopMemoryContext and initialize name,
+    // nqueries and all query plans in it.
+    PreparedModule *pmod;
+    PG_TRY();
+    {
+        pmod = (PreparedModule *)MemoryContextAllocZero(
+            TopMemoryContext,
+            sizeof(PreparedModule) + sizeof(QueryPlan) * tuptable->numvals);
+        PG_TRY(2);
+        {
+            memcpy(pmod->name, VARDATA(name), VARSIZE_ANY_EXHDR(name));
+            pmod->nqueries = (int)tuptable->numvals;
+            bool isnull;
+            for (int i = 0; i < pmod->nqueries; i++) {
+                int32 idx = DatumGetInt32(SPI_getbinval(tuptable->vals[i],
+                                                        tuptable->tupdesc,
+                                                        2,
+                                                        &isnull));
+                Assert(!isnull);
+                if (i != idx)
+                    ereport(ERROR,
+                            errmsg("bad query index %d: expect %d", idx, i));
+                rst_init_query_plan(&pmod->queries[i],
+                                    tuptable->vals[i],
+                                    tuptable->tupdesc);
+            }
+        }
+        PG_CATCH(2);
+        {
+            rst_free_module(pmod);
+            PG_RE_THROW();
+        }
+        PG_END_TRY(2);
+    }
+    PG_FINALLY();
+    { SPI_freetuptable(tuptable); }
+    PG_END_TRY();
 
     return pmod;
+}
+
+static void
+load_heap_types(ArrayType *array, CommonHeapTypes *heap_types) {
+    int num;
+    Datum *datums;
+    deconstruct_array(array,
+                      INT4OID,
+                      sizeof(int32_t),
+                      true,
+                      'i',
+                      &datums,
+                      NULL,
+                      &num);
+    int expected_num = sizeof(CommonHeapTypes) / sizeof(int32_t);
+    if (expected_num != num)
+        ereport(
+            ERROR,
+            errmsg("expected %d heap types, actual: %d", expected_num, num));
+    int32_t *ptr = (int32_t *)heap_types;
+    for (int i = 0; i < num; i++) {
+        ptr[i] = DatumGetInt32(datums[i]);
+    }
+    pfree(datums);
 }
 
 static AOTModule *

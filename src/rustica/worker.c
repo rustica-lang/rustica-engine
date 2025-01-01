@@ -26,6 +26,7 @@
 #include "tcop/utility.h"
 #include "utils/snapmgr.h"
 #include "pgstat.h"
+
 #include "llhttp.h"
 
 #include "rustica/gucs.h"
@@ -101,16 +102,13 @@ maybe_call_on_error(wasm_exec_env_t exec_env, llhttp_errno_t rv) {
     Context *ctx = wasm_runtime_get_user_data(exec_env);
     if (!ctx->on_error)
         return;
-    if (ctx->bytes == -1) {
-        wasm_func_type_t func_type =
-            wasm_runtime_get_function_type(ctx->on_error,
-                                           exec_env->module_inst->module_type);
-        ctx->bytes = wasm_func_type_get_param_type(func_type, 0).heap_type;
-    }
     const char *reason = llhttp_get_error_reason(&ctx->http_parser);
     uint32_t size = strlen(reason);
     WASMArrayObjectRef buf =
-        wasm_array_obj_new_with_typeidx(exec_env, ctx->bytes, size, NULL);
+        wasm_array_obj_new_with_typeidx(exec_env,
+                                        ctx->module->heap_types.bytes,
+                                        size,
+                                        NULL);
     char *view = wasm_array_obj_first_elem_addr(buf);
     memcpy(view, reason, size);
     wasm_val_t args[1] = { { .kind = WASM_EXTERNREF,
@@ -202,7 +200,6 @@ static NativeSymbol native_env[] = {
     { "llhttp_get_method", env_llhttp_get_method, "()i" },
     { "llhttp_get_http_major", env_llhttp_get_http_major, "()i" },
     { "llhttp_get_http_minor", env_llhttp_get_http_minor, "()i" },
-    { "prepare_statement", env_prepare_statement, "(rr)i" },
     { "execute_statement", env_execute_statement, "(i)i" },
     { "detoast", env_detoast, "(iii)r" },
 };
@@ -493,7 +490,6 @@ init_llhttp(Context *ctx, wasm_module_inst_t instance) {
     wasm_function_inst_t func;
 
     llhttp_init(&ctx->http_parser, HTTP_REQUEST, &ctx->http_settings);
-    ctx->bytes = -1;
     ctx->bytes_view = -1;
 
     if ((func = wasm_runtime_lookup_function(instance, "on_message_begin"))) {
@@ -576,25 +572,7 @@ init_llhttp(Context *ctx, wasm_module_inst_t instance) {
     }
 }
 
-static inline void
-init_pg(Context *ctx, wasm_module_inst_t instance) {
-    wasm_function_inst_t func;
-
-    if ((func = wasm_runtime_lookup_function(instance, "get_queries"))) {
-        ctx->get_queries = func;
-    }
-
-    if ((func = wasm_runtime_lookup_function(instance, "as_raw_datum"))) {
-        ctx->as_raw_datum = func;
-
-        wasm_func_type_t func_type =
-            wasm_runtime_get_function_type(func, instance->module_type);
-        ctx->as_datum = wasm_func_type_get_param_type(func_type, 0).heap_type;
-        ctx->raw_datum = wasm_func_type_get_result_type(func_type, 0).heap_type;
-    }
-}
-
-static inline void
+static void
 on_readable() {
     // Take a job from the FD channel
     if (recvmsg(sock, &fd_msg.msg, 0) < 0) {
@@ -641,7 +619,7 @@ on_readable() {
             exec_env = rst_module_instantiate(pmod, 256 * 1024, 1024 * 1024);
 
             // Prepare context for execution
-            Context context = { .fd = client };
+            Context context = { .fd = client, .module = pmod };
             wasm_runtime_set_user_data(exec_env, &context);
             context.wait_set = CreateWaitEventSet(CurrentMemoryContext, 2);
             AddWaitEventToSet(context.wait_set,
@@ -655,37 +633,16 @@ on_readable() {
                               NULL,
                               NULL);
 
+            // Initialize context
+            rst_init_instance_context(exec_env);
             wasm_module_inst_t instance =
                 wasm_exec_env_get_module_inst(exec_env);
             init_llhttp(&context, instance);
             context.http_parser.data = exec_env;
-            init_pg(&context, instance);
 
+            // Run the WASM module instance
             wasm_function_inst_t start_func =
                 wasm_runtime_lookup_function(instance, "_start");
-            if (start_func) {
-                if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL)) {
-                    ereport(WARNING, errmsg("failed to run _start"));
-                }
-            }
-
-            start_func = wasm_runtime_lookup_function(instance, "init_modules");
-            if (start_func) {
-                wasm_val_t rv;
-                if (!wasm_runtime_call_wasm_a(exec_env,
-                                              start_func,
-                                              1,
-                                              &rv,
-                                              0,
-                                              NULL)) {
-                    ereport(WARNING, errmsg("failed to run init_modules"));
-                }
-                if (rv.of.i32 == -1) {
-                    free_app_plans();
-                }
-            }
-
-            start_func = wasm_runtime_lookup_function(instance, "run");
             if (!start_func)
                 ereport(ERROR, errmsg("cannot find WASM entrypoint"));
             if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL))
@@ -746,8 +703,6 @@ invalidate_cached_module(const char *module_name) {
     PreparedModule *module = rst_lookup_module(module_name);
     if (module)
         rst_free_module(module);
-    if (strcmp(module_name, "main") == 0)
-        free_app_plans();
 }
 
 static int

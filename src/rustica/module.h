@@ -22,12 +22,18 @@
 
 #include "aot_runtime.h"
 
+#include "rustica/query.h"
+#include "rustica/wamr.h"
+
 #define RST_MODULE_NAME_MAXLEN 127
 
 typedef struct PreparedModule {
     char name[RST_MODULE_NAME_MAXLEN + 1];
     AOTModule *module;
     SPITupleTable *loading_tuptable;
+    CommonHeapTypes heap_types;
+    int nqueries;
+    QueryPlan queries[];
 } PreparedModule;
 
 void

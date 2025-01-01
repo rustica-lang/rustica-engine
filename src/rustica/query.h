@@ -17,8 +17,6 @@
 #ifndef RUSTICA_QUERY_H
 #define RUSTICA_QUERY_H
 
-#include <sys/socket.h>
-
 #include "postgres.h"
 #include "executor/spi.h"
 #include "storage/latch.h"
@@ -31,8 +29,10 @@
 #define RST_WASM_TO_PG_RET Datum
 #define RST_PG_TO_WASM_ARGS                                          \
     Datum value, wasm_struct_obj_t tuptable, uint32 row, uint32 col, \
-        wasm_exec_env_t exec_env, uint32 type_idx
+        wasm_exec_env_t exec_env, wasm_ref_type_t type
 #define RST_PG_TO_WASM_RET wasm_value_t
+
+typedef struct PreparedModule PreparedModule;
 
 typedef struct Context {
     WaitEventSet *wait_set;
@@ -42,7 +42,6 @@ typedef struct Context {
     llhttp_settings_t http_settings;
     WASMArrayObjectRef current_buf;
     int32_t bytes_view;
-    int32_t bytes;
     wasm_function_inst_t on_message_begin;
     wasm_function_inst_t on_method;
     wasm_function_inst_t on_method_complete;
@@ -59,38 +58,39 @@ typedef struct Context {
     wasm_function_inst_t on_message_complete;
     wasm_function_inst_t on_error;
 
-    int32_t as_datum;
-    int32_t raw_datum;
-    wasm_function_inst_t get_queries;
-    wasm_function_inst_t as_raw_datum;
+    PreparedModule *module;
+    wasm_function_inst_t call_as_datum;
+    wasm_struct_obj_t queries;
     List *tuple_tables;
 } Context;
 
 typedef RST_WASM_TO_PG_RET (*WASM2PGFunc)(RST_WASM_TO_PG_ARGS);
 typedef RST_PG_TO_WASM_RET (*PG2WASMFunc)(RST_PG_TO_WASM_ARGS);
 
-typedef struct AppPlan {
-    char *sql;
+typedef struct QueryPlan {
     SPIPlanPtr plan;
     uint32 nargs;
     uint32 nattrs;
+    wasm_ref_type_t tuptable_type;
+    wasm_ref_type_t array_type;
+    wasm_ref_type_t fixed_array_type;
+    wasm_ref_type_t ret_type;
+    wasm_ref_type_t *ret_field_types;
     WASM2PGFunc *wasm_to_pg_funcs;
     PG2WASMFunc *pg_to_wasm_funcs;
-} AppPlan;
-
-extern AppPlan *app_plans;
-extern int tuptables_size;
+} QueryPlan;
 
 void
-free_app_plans();
+rst_init_query_plan(QueryPlan *plan, HeapTuple query_tup, TupleDesc tupdesc);
+
+void
+rst_free_query_plan(QueryPlan *plan);
+
+void
+rst_init_instance_context(wasm_exec_env_t exec_env);
 
 void
 rst_free_instance_context(wasm_exec_env_t exec_env);
-
-int32_t
-env_prepare_statement(wasm_exec_env_t exec_env,
-                      WASMArrayObjectRef sql_buf,
-                      WASMArrayObjectRef arg_type_oids);
 
 int32_t
 env_execute_statement(wasm_exec_env_t exec_env, int32_t idx);
