@@ -25,6 +25,9 @@
 #include "commands/async.h"
 #include "tcop/utility.h"
 #include "utils/snapmgr.h"
+#ifdef RUSTICA_SQL_BACKDOOR
+#include "utils/jsonb.h"
+#endif
 #include "pgstat.h"
 
 #include "llhttp.h"
@@ -189,6 +192,67 @@ env_llhttp_get_http_minor(wasm_exec_env_t exec_env) {
     return llhttp_get_http_minor(&ctx->http_parser);
 }
 
+#ifdef RUSTICA_SQL_BACKDOOR
+wasm_array_obj_t
+env_sql_backdoor(wasm_exec_env_t exec_env,
+                 WASMArrayObjectRef buf,
+                 int32_t start,
+                 int32_t len) {
+    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
+    char *resp;
+
+    PG_TRY();
+    {
+        char *view = (char *)wasm_array_obj_first_elem_addr(buf) + start;
+        if (view[len - 1] != '\0') {
+            char *sql = (char *)palloc(len + 1);
+            memcpy(sql, view, len);
+            sql[len] = '\0';
+            view = sql;
+        }
+        ereport(DEBUG1, errmsg("backdoor execute SQL: %s", view));
+        if (SPI_execute(view, false, 0) < 0)
+            ereport(ERROR, errmsg("SPI_execute failed"));
+        bool isnull = true;
+        TupleDesc tupdesc = SPI_tuptable->tupdesc;
+        Datum datum;
+        if (SPI_tuptable->numvals == 1 && tupdesc->natts == 1
+            && tupdesc->attrs[0].atttypid == JSONBOID) {
+            datum = SPI_getbinval(SPI_tuptable->vals[0],
+                                  SPI_tuptable->tupdesc,
+                                  1,
+                                  &isnull);
+        }
+        if (isnull) {
+            resp = "null";
+        }
+        else {
+            Jsonb *json = DatumGetJsonbP(datum);
+            resp = JsonbToCString(NULL, &json->root, VARSIZE(json));
+        }
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        resp = psprintf("{\"errcode\": %d, \"message\": \"%s\"}",
+                        edata->sqlerrcode,
+                        edata->message);
+        FreeErrorData(edata);
+    }
+    PG_END_TRY();
+
+    uint32 resp_len = strlen(resp);
+    wasm_array_obj_t rv =
+        wasm_array_obj_new_with_typeidx(exec_env,
+                                        ctx->module->heap_types.bytes,
+                                        resp_len,
+                                        NULL);
+    char *dest = (char *)wasm_array_obj_first_elem_addr(rv);
+    memcpy(dest, resp, resp_len);
+    return rv;
+}
+#endif
+
 static NativeSymbol native_env[] = {
     { "recv", env_recv, "(rii)i" },
     { "send", env_send, "(rii)i" },
@@ -202,6 +266,9 @@ static NativeSymbol native_env[] = {
     { "llhttp_get_http_minor", env_llhttp_get_http_minor, "()i" },
     { "execute_statement", env_execute_statement, "(i)i" },
     { "detoast", env_detoast, "(iii)r" },
+#ifdef RUSTICA_SQL_BACKDOOR
+    { "sql_backdoor", env_sql_backdoor, "(rii)r" },
+#endif
 };
 
 static int

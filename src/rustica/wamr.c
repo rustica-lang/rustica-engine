@@ -47,6 +47,9 @@ NativeSymbol rst_noop_native_env[] = {
     { "llhttp_get_http_minor", native_noop, "()i" },
     { "execute_statement", native_noop, "(i)i" },
     { "detoast", native_noop, "(iii)r" },
+#ifdef RUSTICA_SQL_BACKDOOR
+    { "sql_backdoor", native_noop, "(rii)r" },
+#endif
 };
 
 void

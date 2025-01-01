@@ -7,6 +7,7 @@ VENDOR_DIR = vendor
 WAMR_VERSION = 2.1.2
 LLHTTP_VERSION = 9.2.1
 MODULE_big = rustica-wamr
+SQL_BACKDOOR = 0
 
 # Vendor paths
 WAMR_DIR = $(VENDOR_DIR)/wamr-$(WAMR_VERSION)
@@ -218,6 +219,10 @@ ifeq ($(BUNDLE_LLVM),1)
 		-Wl,--no-whole-archive
 else
 	SHLIB_LINK += -lLLVM
+endif
+
+ifeq ($(SQL_BACKDOOR),1)
+	WAMR_DEFINES += -DRUSTICA_SQL_BACKDOOR=1
 endif
 
 PG_CFLAGS += \
