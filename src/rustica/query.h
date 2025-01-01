@@ -63,6 +63,7 @@ typedef struct Context {
     int32_t raw_datum;
     wasm_function_inst_t get_queries;
     wasm_function_inst_t as_raw_datum;
+    List *tuple_tables;
 } Context;
 
 typedef RST_WASM_TO_PG_RET (*WASM2PGFunc)(RST_WASM_TO_PG_ARGS);
@@ -82,6 +83,9 @@ extern int tuptables_size;
 
 void
 free_app_plans();
+
+void
+rst_free_instance_context(wasm_exec_env_t exec_env);
 
 int32_t
 env_prepare_statement(wasm_exec_env_t exec_env,

@@ -716,6 +716,7 @@ on_readable() {
             wasm_module_inst_t instance =
                 wasm_exec_env_get_module_inst(exec_env);
             wasm_runtime_deinstantiate(instance);
+            rst_free_instance_context(exec_env);
             wasm_runtime_destroy_exec_env(exec_env);
         }
 
@@ -725,7 +726,6 @@ on_readable() {
             CommitTransactionCommand();
             pgstat_report_stat(true);
             pgstat_report_activity(STATE_IDLE, NULL);
-            tuptables_size = 0;
         }
 
         StreamClose(client);

@@ -29,10 +29,6 @@ AppPlan *app_plans = NULL;
 static int app_plans_size = 0;
 static size_t app_plans_allocated = 2;
 
-static SPITupleTable **tuptables = NULL;
-int tuptables_size = 0;
-static size_t tuptables_allocated = 2;
-
 wasm_struct_type_t
 get_query_struct_type_by_sql_idx(wasm_exec_env_t exec_env, int32_t idx) {
     Context *ctx = wasm_runtime_get_user_data(exec_env);
@@ -157,11 +153,11 @@ is_as_datum_impl(wasm_exec_env_t exec_env, uint32 type_idx) {
 }
 
 static Datum
-get_tuple_table_value(int32_t idx, int32_t row, int32_t col) {
-    if (idx < 0 || idx > tuptables_size)
+get_tuple_table_value(Context *ctx, int32_t idx, int32_t row, int32_t col) {
+    if (idx < 0 || idx > list_length(ctx->tuple_tables))
         ereport(ERROR, errmsg("tuple table idx #%d is out of bounds", idx));
 
-    SPITupleTable *tuptable = tuptables[idx];
+    SPITupleTable *tuptable = lfirst(list_nth_cell(ctx->tuple_tables, idx));
     if (tuptable == NULL)
         ereport(
             ERROR,
@@ -232,7 +228,7 @@ wasm_as_datum_to_pg_value(RST_WASM_TO_PG_ARGS) {
     wasm_value_t col;
     wasm_struct_obj_get_field(tuple_table, 2, false, &col);
 
-    return get_tuple_table_value(tuple_table_idx.i32, row.i32, col.i32);
+    return get_tuple_table_value(ctx, tuple_table_idx.i32, row.i32, col.i32);
 }
 
 static RST_PG_TO_WASM_RET
@@ -299,9 +295,15 @@ pg_value_to_wasm_as_datum(RST_PG_TO_WASM_ARGS) {
 
 static void
 tuple_table_finalizer(const wasm_obj_t obj, void *data) {
-    uint32 idx = (uint32)(uintptr_t)data;
-    SPI_freetuptable(tuptables[idx]);
-    tuptables[idx] = NULL;
+    Context *ctx = (Context *)data;
+    wasm_struct_obj_t tuptable = (wasm_struct_obj_t)obj;
+    wasm_value_t val;
+    wasm_struct_obj_get_field(tuptable, 0, false, &val);
+    if (val.i32 >= 0 && val.i32 < list_length(ctx->tuple_tables)) {
+        ListCell *cell = list_nth_cell(ctx->tuple_tables, val.i32);
+        SPI_freetuptable((SPITupleTable *)lfirst(cell));
+        lfirst(cell) = NULL;
+    }
 }
 
 void
@@ -617,6 +619,16 @@ fail:
     return -1;
 }
 
+void
+rst_free_instance_context(wasm_exec_env_t exec_env) {
+    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
+    ListCell *cell;
+    foreach (cell, ctx->tuple_tables) {
+        SPI_freetuptable((SPITupleTable *)lfirst(cell));
+    }
+    list_free(ctx->tuple_tables);
+}
+
 int32_t
 env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     ereport(DEBUG1, (errmsg("execute sql: #%d", idx)));
@@ -648,21 +660,7 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     }
     SPI_execute_plan(app_plan.plan, values, NULL, false, 0);
 
-    uint32 tuptable_idx = tuptables_size++;
-    if (!tuptables) {
-        tuptables = (SPITupleTable **)palloc(sizeof(SPITupleTable *)
-                                             * tuptables_allocated);
-    }
-    else if (tuptables_size > tuptables_allocated) {
-        tuptables_allocated = tuptables_allocated * 2;
-        tuptables = (SPITupleTable **)repalloc(tuptables,
-                                               sizeof(SPITupleTable *)
-                                                   * tuptables_allocated);
-    }
-    if (!tuptables) {
-        ereport(WARNING, errmsg("could not allocate memory for tuple tables"));
-        return -1;
-    }
+    int tuptable_idx = list_length(ctx->tuple_tables);
 
     // $TupleTable[T]
     WASMStructType *tuptable_struct_type;
@@ -679,7 +677,7 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     wasm_obj_set_gc_finalizer(exec_env,
                               (wasm_obj_t)tuptable_struct_ref,
                               tuple_table_finalizer,
-                              (void *)(uintptr_t)tuptable_idx);
+                              ctx);
 
     WASMModuleCommon *module = wasm_exec_env_get_module(exec_env);
 
@@ -688,7 +686,12 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     tuptable_idx_value.i32 = tuptable_idx;
     wasm_struct_obj_set_field(tuptable_struct_ref, 0, &tuptable_idx_value);
 
-    tuptables[tuptable_idx] = SPI_tuptable;
+    MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
+    PG_TRY();
+    { ctx->tuple_tables = lappend(ctx->tuple_tables, SPI_tuptable); }
+    PG_FINALLY();
+    { MemoryContextSwitchTo(tx_mctx); }
+    PG_END_TRY();
 
     // $@moonbitlang/core/builtin.Array<T> - struct
     wasm_ref_type_t rows_struct_ref_type =
@@ -767,7 +770,8 @@ env_detoast(wasm_exec_env_t exec_env,
             int32_t tuptable_idx,
             int32_t row,
             int32_t col) {
-    Datum pg_value = get_tuple_table_value(tuptable_idx, row, col);
+    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
+    Datum pg_value = get_tuple_table_value(ctx, tuptable_idx, row, col);
     struct varlena *pg_var = PG_DETOAST_DATUM_PACKED(pg_value);
     uint32_t size = VARSIZE_ANY(pg_var);
     // TODO: Replace 2 with the type index for the bytes type
