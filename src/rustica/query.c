@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 燕几（北京）科技有限公司
+ * Copyright (c) 2024-present 燕几（北京）科技有限公司
  *
  * Rustica (runtime) is licensed under Mulan PSL v2. You can use this
  * software according to the terms and conditions of the Mulan PSL v2.
