@@ -780,6 +780,8 @@ env_detoast(wasm_exec_env_t exec_env,
     WASMArrayObjectRef buf =
         wasm_array_obj_new_with_typeidx(exec_env, 2, size, NULL);
     char *view = wasm_array_obj_first_elem_addr(buf);
-    memcpy(view, pg_var, size);
+    memcpy(view, VARDATA_ANY(pg_var), size);
+    if ((void *)pg_var != DatumGetPointer(pg_value))
+        pfree(pg_var);
     return buf;
 }
