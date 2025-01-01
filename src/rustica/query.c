@@ -190,22 +190,25 @@ get_tuple_table_value(int32_t tuptable_idx, int32_t row, int32_t col) {
 
 static RST_WASM_TO_PG_RET
 wasm_i32_to_pg_bool(RST_WASM_TO_PG_ARGS) {
-    return (Datum)(value.i32 ? 1 : 0);
+    PG_RETURN_BOOL(value.i32 ? true : false);
 }
 
 static RST_WASM_TO_PG_RET
-wasm_i32_to_pg_i32(RST_WASM_TO_PG_ARGS) {
-    return (Datum)value.i32;
+wasm_i32_to_pg_int32(RST_WASM_TO_PG_ARGS) {
+    PG_RETURN_INT32(value.i32);
 }
 
 static RST_WASM_TO_PG_RET
-wasm_i64_to_pg_i64(RST_WASM_TO_PG_ARGS) {
-    return (Datum)value.i64;
+wasm_i64_to_pg_int64(RST_WASM_TO_PG_ARGS) {
+    PG_RETURN_INT64(value.i64);
 }
 
 static RST_WASM_TO_PG_RET
 wasm_bytes_to_pg_text(RST_WASM_TO_PG_ARGS) {
-    return CStringGetTextDatum(wasm_array_obj_first_elem_addr(value.data));
+    wasm_array_obj_t arr = (wasm_array_obj_t)value.gc_obj;
+    char *buf = (char *)wasm_array_obj_first_elem_addr(arr);
+    uint32 len = wasm_array_obj_length(arr);
+    PG_RETURN_TEXT_P(cstring_to_text_with_len(buf, len));
 }
 
 static RST_WASM_TO_PG_RET
@@ -219,7 +222,7 @@ wasm_bytest_to_pg_timestamp(RST_WASM_TO_PG_ARGS) {
 
 static RST_WASM_TO_PG_RET
 wasm_as_datum_to_pg_value(RST_WASM_TO_PG_ARGS) {
-    Context *ctx = wasm_runtime_get_user_data(exec_env);
+    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
 
     wasm_val_t args[1] = { { .kind = WASM_EXTERNREF,
                              .of.foreign = (uintptr_t)value.gc_obj } };
@@ -240,22 +243,19 @@ wasm_as_datum_to_pg_value(RST_WASM_TO_PG_ARGS) {
 
 static RST_PG_TO_WASM_RET
 pg_bool_to_wasm_i32(RST_PG_TO_WASM_ARGS) {
-    wasm_value_t wasm_value;
-    wasm_value.i32 = DatumGetBool(value);
+    wasm_value_t wasm_value = { .i32 = DatumGetBool(value) };
     return wasm_value;
 }
 
 static RST_PG_TO_WASM_RET
-pg_i32_to_wasm_i32(RST_PG_TO_WASM_ARGS) {
-    wasm_value_t wasm_value;
-    wasm_value.i32 = DatumGetInt32(value);
+pg_int32_to_wasm_i32(RST_PG_TO_WASM_ARGS) {
+    wasm_value_t wasm_value = { .i32 = DatumGetInt32(value) };
     return wasm_value;
 }
 
 static RST_PG_TO_WASM_RET
-pg_i64_to_wasm_i64(RST_PG_TO_WASM_ARGS) {
-    wasm_value_t wasm_value;
-    wasm_value.i64 = DatumGetInt64(value);
+pg_int64_to_wasm_i64(RST_PG_TO_WASM_ARGS) {
+    wasm_value_t wasm_value = { .i64 = DatumGetInt64(value) };
     return wasm_value;
 }
 
@@ -294,9 +294,9 @@ pg_value_to_wasm_as_datum(RST_PG_TO_WASM_ARGS) {
     wasm_value_t field_val;
     field_val.gc_obj = (wasm_obj_t)tuptable;
     wasm_struct_obj_set_field(datum_obj, 0, &field_val);
-    field_val.i32 = row;
+    field_val.i32 = (int32)row;
     wasm_struct_obj_set_field(datum_obj, 1, &field_val);
-    field_val.i32 = col;
+    field_val.i32 = (int32)col;
     wasm_struct_obj_set_field(datum_obj, 2, &field_val);
 
     wasm_value.gc_obj = (wasm_obj_t)datum_obj;
@@ -428,7 +428,7 @@ env_prepare_statement(wasm_exec_env_t exec_env,
                 goto fail;
             case INT4OID:
                 if (wasm_argtype == VALUE_TYPE_I32) {
-                    wasm_to_pg_funcs[i] = wasm_i32_to_pg_i32;
+                    wasm_to_pg_funcs[i] = wasm_i32_to_pg_int32;
                     break;
                 }
                 ereport(
@@ -439,10 +439,10 @@ env_prepare_statement(wasm_exec_env_t exec_env,
                 goto fail;
             case INT8OID:
                 if (wasm_argtype == VALUE_TYPE_I64) {
-                    wasm_to_pg_funcs[i] = wasm_i64_to_pg_i64;
+                    wasm_to_pg_funcs[i] = wasm_i64_to_pg_int64;
                 }
                 else if (wasm_argtype == VALUE_TYPE_I32) {
-                    wasm_to_pg_funcs[i] = wasm_i32_to_pg_i32;
+                    wasm_to_pg_funcs[i] = wasm_i32_to_pg_int32;
                 }
                 else {
                     ereport(WARNING,
@@ -553,7 +553,7 @@ env_prepare_statement(wasm_exec_env_t exec_env,
                 goto fail;
             case INT4OID:
                 if (wasm_valtype == VALUE_TYPE_I32) {
-                    pg_to_wasm_funcs[i] = pg_i32_to_wasm_i32;
+                    pg_to_wasm_funcs[i] = pg_int32_to_wasm_i32;
                     break;
                 }
                 ereport(WARNING,
@@ -563,10 +563,10 @@ env_prepare_statement(wasm_exec_env_t exec_env,
                 goto fail;
             case INT8OID:
                 if (wasm_valtype == VALUE_TYPE_I64) {
-                    pg_to_wasm_funcs[i] = pg_i64_to_wasm_i64;
+                    pg_to_wasm_funcs[i] = pg_int64_to_wasm_i64;
                 }
                 else if (wasm_valtype == VALUE_TYPE_I32) {
-                    pg_to_wasm_funcs[i] = pg_i32_to_wasm_i32;
+                    pg_to_wasm_funcs[i] = pg_int32_to_wasm_i32;
                 }
                 else {
                     ereport(WARNING,
