@@ -157,33 +157,27 @@ is_as_datum_impl(wasm_exec_env_t exec_env, uint32 type_idx) {
 }
 
 static Datum
-get_tuple_table_value(int32_t tuptable_idx, int32_t row, int32_t col) {
-    if (tuptable_idx < 0 || tuptable_idx > tuptables_size) {
-        ereport(ERROR,
-                (errmsg("tuple table idx #%d is out of bounds", tuptable_idx)));
-    }
+get_tuple_table_value(int32_t idx, int32_t row, int32_t col) {
+    if (idx < 0 || idx > tuptables_size)
+        ereport(ERROR, errmsg("tuple table idx #%d is out of bounds", idx));
 
-    SPITupleTable *tuptable = tuptables[tuptable_idx];
-    if (tuptable == NULL) {
+    SPITupleTable *tuptable = tuptables[idx];
+    if (tuptable == NULL)
         ereport(
             ERROR,
-            (errmsg("tuple table at idx #%d is already freed or does not exist",
-                    tuptable_idx)));
-    }
+            errmsg("tuple table at idx #%d is already freed or does not exist",
+                   idx));
 
-    if (row < 0 || row >= tuptable->numvals) {
-        ereport(ERROR, (errmsg("row idx #%d is out of bounds", row)));
-    }
+    if (row < 0 || row >= tuptable->numvals)
+        ereport(ERROR, errmsg("row idx #%d is out of bounds", row));
 
     bool isnull;
     HeapTuple tuple = tuptable->vals[row];
     Datum pg_value = SPI_getbinval(tuple, tuptable->tupdesc, col + 1, &isnull);
-    if (pg_value == (Datum)NULL) {
-        ereport(ERROR,
-                (errmsg("could not get value at row #%d, column #%d",
-                        row,
-                        col + 1)));
-    }
+    if (pg_value == (Datum)NULL)
+        ereport(
+            ERROR,
+            errmsg("could not get value at row #%d, column #%d", row, col + 1));
 
     return pg_value;
 }
