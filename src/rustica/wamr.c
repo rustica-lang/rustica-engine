@@ -34,6 +34,25 @@ static NativeSymbol spectest[] = {
 static void
 native_noop(wasm_exec_env_t exec_env) {}
 
+TidOid *tid_map = NULL;
+int tid_map_len = 0;
+
+static int32_t
+env_tid_to_oid(wasm_exec_env_t exec_env, WASMArrayObjectRef tid_bytes) {
+    if (tid_map == NULL || tid_map_len == 0)
+        return 0;
+    // UUID must be 16-bytes
+    if (wasm_array_obj_length(tid_bytes) != 16)
+        return 0;
+    pg_uuid_t *tid = wasm_array_obj_first_elem_addr(tid_bytes);
+    for (int i = 0; i < tid_map_len; i++) {
+        if (memcmp(tid_map[i].tid->data, tid->data, UUID_LEN) == 0) {
+            return (int32_t)tid_map[i].oid;
+        }
+    }
+    return 0;
+}
+
 NativeSymbol rst_noop_native_env[] = {
     { "recv", native_noop, "(rii)i" },
     { "send", native_noop, "(rii)i" },
@@ -47,6 +66,7 @@ NativeSymbol rst_noop_native_env[] = {
     { "llhttp_get_http_minor", native_noop, "()i" },
     { "execute_statement", native_noop, "(i)i" },
     { "detoast", native_noop, "(iii)r" },
+    { "tid_to_oid", env_tid_to_oid, "(r)i" },
 #ifdef RUSTICA_SQL_BACKDOOR
     { "sql_backdoor", native_noop, "(rii)r" },
 #endif

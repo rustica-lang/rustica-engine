@@ -313,7 +313,8 @@ $(DEV_PG_INSTALL): $(DEV_PG_SRC)
 	cd $(DEV_PG_SRC) && \
 		$(CLEAN_ENV) ./configure --prefix $(DEV_PG_INSTALL_PREFIX) --with-uuid=e2fs --enable-debug && \
 		$(CLEAN_ENV) $(MAKE) -j $(shell nproc) && \
-		$(CLEAN_ENV) $(MAKE) install
+		$(CLEAN_ENV) $(MAKE) install && \
+		$(CLEAN_ENV) $(MAKE) -C contrib install
 
 $(DEV_PG_INSTALL)/.stub: $(DEV_PG_INSTALL)
 	echo > $(DEV_PG_INSTALL)/.stub

@@ -17,7 +17,18 @@
 #ifndef RUSTICA_WAMR_H
 #define RUSTICA_WAMR_H
 
+#include "postgres.h"
+#include "utils/uuid.h"
+
 #include "wasm_runtime_common.h"
+
+typedef struct TidOid {
+    pg_uuid_t *tid;
+    Oid oid;
+} TidOid;
+
+extern TidOid *tid_map;
+extern int tid_map_len;
 
 extern NativeSymbol rst_noop_native_env[];
 

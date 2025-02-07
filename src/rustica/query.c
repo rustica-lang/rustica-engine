@@ -110,7 +110,7 @@ wasm_as_datum_to_pg_value(RST_WASM_TO_PG_ARGS) {
 
         // Owned(Bytes)
         case 1:
-            return CStringGetDatum(
+            return PointerGetDatum(
                 wasm_array_obj_first_elem_addr((wasm_array_obj_t)val.gc_obj));
 
         // Ref(RawDatumRef)
@@ -407,7 +407,8 @@ rst_init_instance_context(wasm_exec_env_t exec_env) {
     }
     if ((func = wasm_runtime_lookup_function(instance, "get_queries"))) {
         wasm_val_t val;
-        if (!wasm_runtime_call_wasm_a(exec_env, func, 1, &val, 0, NULL))
+        wasm_val_t args[1] = { { .kind = WASM_I32, .of.i32 = 0 } };
+        if (!wasm_runtime_call_wasm_a(exec_env, func, 1, &val, 1, args))
             ereport(ERROR, errmsg("failed to call get_queries()"));
         Assert(val.kind == WASM_EXTERNREF);
         ctx->queries = (wasm_struct_obj_t)val.of.ref;

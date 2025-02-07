@@ -48,7 +48,12 @@ CREATE TYPE rustica.compile_result AS (
     queries rustica.queries[]
 );
 
-CREATE FUNCTION rustica.compile_wasm(bytea)
+CREATE TYPE rustica.tid_oid AS (
+    tid uuid,
+    oid oid
+);
+
+CREATE FUNCTION rustica.compile_wasm(bytea, rustica.tid_oid[])
     RETURNS rustica.compile_result
     AS 'MODULE_PATHNAME'
     LANGUAGE C STRICT;

@@ -183,16 +183,41 @@ rst_compile(PG_FUNCTION_ARGS) {
     bytea *wasm = PG_GETARG_BYTEA_P(0);
     int32 wasm_size = VARSIZE_ANY_EXHDR(wasm);
 
-    wasm_module_t module = wasm_runtime_load((uint8 *)VARDATA_ANY(wasm),
-                                             wasm_size,
-                                             ERROR_BUF_PARAMS);
-    if (!module)
-        ereport(ERROR, errmsg("failed to load WASM module: %s", ERROR_BUF));
+    ArrayType *tid_oid_map = PG_GETARG_ARRAYTYPE_P(1);
+    Oid tid_oid_type = ARR_ELEMTYPE(tid_oid_map);
+    Datum *map_datums;
+    deconstruct_array(tid_oid_map,
+                      tid_oid_type,
+                      get_typlen(tid_oid_type),
+                      false,
+                      'd',
+                      &map_datums,
+                      NULL,
+                      &tid_map_len);
+    if (tid_map_len > 0) {
+        tid_map = (TidOid *)palloc(sizeof(TidOid) * tid_map_len);
+        for (int i = 0; i < tid_map_len; i++) {
+            HeapTupleHeader pair = DatumGetHeapTupleHeader(map_datums[i]);
+            bool isnull;
+            tid_map[i].tid = DatumGetUUIDP(GetAttributeByNum(pair, 1, &isnull));
+            Assert(!isnull);
+            tid_map[i].oid =
+                DatumGetObjectId(GetAttributeByNum(pair, 2, &isnull));
+            Assert(!isnull);
+        }
+    }
 
     TupleDesc rv_tupdesc;
-    Datum rv[3];
+    Datum rv[3] = { 0 };
+    wasm_module_t module = NULL;
     PG_TRY();
     {
+        module = wasm_runtime_load((uint8 *)VARDATA_ANY(wasm),
+                                   wasm_size,
+                                   ERROR_BUF_PARAMS);
+        if (!module)
+            ereport(ERROR, errmsg("failed to load WASM module: %s", ERROR_BUF));
+
         // Find type descriptors needed to build the result
 #ifdef USE_ASSERT_CHECKING
         TypeFuncClass rv_cls =
@@ -212,10 +237,19 @@ rst_compile(PG_FUNCTION_ARGS) {
         run_and_compile(module, query_oid, &rv[1], &rv[2]);
     }
     PG_FINALLY();
-    { wasm_runtime_unregister_and_unload(module); }
+    {
+        if (module != NULL)
+            wasm_runtime_unregister_and_unload(module);
+        pfree(tid_map);
+        tid_map = NULL;
+        tid_map_len = 0;
+    }
     PG_END_TRY();
 
     bool isnull[3] = { 0 };
+    // If no queries are found, mark the 3rd field (queries) as NULL
+    if (!rv[2])
+        isnull[2] = 1;
     PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(rv_tupdesc, rv, isnull)));
 }
 
@@ -302,8 +336,12 @@ compile_queries(CommonHeapTypes *heap_types,
                 wasm_func_type_t func_type,
                 wasm_module_t module) {
     // Validate the signature of get_queries()
-    if (wasm_func_type_get_param_count(func_type) != 0)
-        ereport(ERROR, errmsg("get_queries() must not take any argument"));
+    if (wasm_func_type_get_param_count(func_type) != 1)
+        ereport(ERROR, errmsg("get_queries() must take exactly 1 argument"));
+    if (wasm_func_type_get_param_type(func_type, 0).value_type
+        != VALUE_TYPE_I32)
+        ereport(ERROR,
+                errmsg("get_queries() must take a boolean/i32 argument"));
     if (wasm_func_type_get_result_count(func_type) != 1)
         ereport(ERROR, errmsg("get_queries() must return exactly 1 value"));
     wasm_struct_type_t queries_type = wasm_ref_type_get_referred_struct(
@@ -327,7 +365,7 @@ compile_queries(CommonHeapTypes *heap_types,
     TupleDesc query_tupdesc = NULL;
     PG_TRY();
     {
-        // Call get_queries() with a temporary instance
+        // Call get_queries(populate_args_oids=True) with a temporary instance
         if (!(instance = wasm_runtime_instantiate(module,
                                                   64 * 1024,
                                                   256 * 1024,
@@ -339,12 +377,13 @@ compile_queries(CommonHeapTypes *heap_types,
             wasm_runtime_lookup_function(instance, "get_queries");
         Assert(get_queries_func != NULL);
         wasm_val_t val;
+        wasm_val_t args[1] = { { .kind = WASM_I32, .of.i32 = 1 } };
         if (!wasm_runtime_call_wasm_a(exec_env,
                                       get_queries_func,
                                       1,
                                       &val,
-                                      0,
-                                      NULL))
+                                      1,
+                                      args))
             ereport(ERROR, errmsg("failed to call get_queries()"));
         Assert(val.kind == WASM_EXTERNREF);
         wasm_struct_obj_t queries = (wasm_struct_obj_t)val.of.ref;
