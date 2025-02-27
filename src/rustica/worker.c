@@ -26,6 +26,7 @@
 #include "tcop/utility.h"
 #include "utils/snapmgr.h"
 #ifdef RUSTICA_SQL_BACKDOOR
+#include "utils/builtins.h"
 #include "utils/jsonb.h"
 #endif
 #include "pgstat.h"
@@ -201,7 +202,7 @@ env_sql_backdoor(wasm_exec_env_t exec_env,
                  int32_t len) {
     Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
     char *resp;
-
+    int res;
     PG_TRY();
     {
         char *view = (char *)wasm_array_obj_first_elem_addr(buf) + start;
@@ -212,26 +213,40 @@ env_sql_backdoor(wasm_exec_env_t exec_env,
             view = sql;
         }
         ereport(DEBUG1, errmsg("backdoor execute SQL: %s", view));
-        if (SPI_execute(view, false, 0) < 0)
-            ereport(ERROR, errmsg("SPI_execute failed"));
+
+        res = SPI_execute(view, false, 0);
+        if (res < 0)
+            ereport(ERROR, errmsg("SPI_execute failed, errcode: %d", res));
+
         bool isnull = true;
-        Datum datum;
-        if (SPI_tuptable != NULL) {
+        if (SPI_tuptable == NULL) {
+            resp = "null";
+        } else {
             TupleDesc tupdesc = SPI_tuptable->tupdesc;
+            Datum datum;
             if (SPI_tuptable->numvals == 1 && tupdesc->natts == 1
-                && tupdesc->attrs[0].atttypid == JSONBOID) {
+                && (tupdesc->attrs[0].atttypid == JSONBOID || tupdesc->attrs[0].atttypid == JSONOID)) {
                 datum = SPI_getbinval(SPI_tuptable->vals[0],
                                       SPI_tuptable->tupdesc,
                                       1,
                                       &isnull);
             }
-        }
-        if (isnull) {
-            resp = "null";
-        }
-        else {
-            Jsonb *json = DatumGetJsonbP(datum);
-            resp = JsonbToCString(NULL, &json->root, VARSIZE_ANY_EXHDR(json));
+            if (isnull) {
+                resp = "null";
+            }
+            else if (tupdesc->attrs[0].atttypid == JSONBOID) {
+                Jsonb *json = DatumGetJsonbP(datum);
+                resp = JsonbToCString(NULL, &json->root, VARSIZE(json));
+            }
+            else if (tupdesc->attrs[0].atttypid == JSONOID) {
+                resp = TextDatumGetCString(datum);
+            }
+            else {
+                ereport(
+                    ERROR,
+                    errmsg("unknown atttype: %d", tupdesc->attrs[0].atttypid));
+                resp = "null";
+            }
         }
     }
     PG_CATCH();
