@@ -17,39 +17,15 @@
 #include "postgres.h"
 #include "executor/spi.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "tcop/utility.h"
 
 #include "wasm_runtime_common.h"
 
+#include "rustica/datatypes.h"
 #include "rustica/module.h"
 #include "rustica/query.h"
-
-static Datum
-get_tuple_table_value(Context *ctx, int32_t idx, int32_t row, int32_t col) {
-    if (idx < 0 || idx > list_length(ctx->tuple_tables))
-        ereport(ERROR, errmsg("tuple table idx #%d is out of bounds", idx));
-
-    SPITupleTable *tuptable = lfirst(list_nth_cell(ctx->tuple_tables, idx));
-    if (tuptable == NULL)
-        ereport(
-            ERROR,
-            errmsg("tuple table at idx #%d is already freed or does not exist",
-                   idx));
-
-    if (row < 0 || row >= tuptable->numvals)
-        ereport(ERROR, errmsg("row idx #%d is out of bounds", row));
-
-    bool isnull;
-    HeapTuple tuple = tuptable->vals[row];
-    Datum pg_value = SPI_getbinval(tuple, tuptable->tupdesc, col + 1, &isnull);
-    if (pg_value == (Datum)NULL)
-        ereport(
-            ERROR,
-            errmsg("could not get value at row #%d, column #%d", row, col + 1));
-
-    return pg_value;
-}
 
 static RST_WASM_TO_PG_RET
 wasm_i32_to_pg_bool(RST_WASM_TO_PG_ARGS) {
@@ -57,91 +33,73 @@ wasm_i32_to_pg_bool(RST_WASM_TO_PG_ARGS) {
 }
 
 static RST_WASM_TO_PG_RET
-wasm_i32_to_pg_int32(RST_WASM_TO_PG_ARGS) {
+wasm_i32_to_pg_int4(RST_WASM_TO_PG_ARGS) {
     PG_RETURN_INT32(value.i32);
 }
 
 static RST_WASM_TO_PG_RET
-wasm_i64_to_pg_int64(RST_WASM_TO_PG_ARGS) {
+wasm_i64_to_pg_int8(RST_WASM_TO_PG_ARGS) {
     PG_RETURN_INT64(value.i64);
 }
 
 static RST_WASM_TO_PG_RET
-wasm_bytes_to_pg_text(RST_WASM_TO_PG_ARGS) {
-    wasm_array_obj_t arr = (wasm_array_obj_t)value.gc_obj;
-    char *buf = (char *)wasm_array_obj_first_elem_addr(arr);
-    uint32 len = wasm_array_obj_length(arr);
-    PG_RETURN_TEXT_P(cstring_to_text_with_len(buf, len));
+wasm_f32_to_pg_float4(RST_WASM_TO_PG_ARGS) {
+    PG_RETURN_FLOAT4(value.f32);
 }
 
 static RST_WASM_TO_PG_RET
-wasm_bytest_to_pg_timestamp(RST_WASM_TO_PG_ARGS) {
-    return DirectFunctionCall3(
-        timestamp_in,
-        CStringGetDatum(wasm_array_obj_first_elem_addr(value.data)),
-        ObjectIdGetDatum(InvalidOid),
-        Int32GetDatum(-1));
+wasm_f64_to_pg_float8(RST_WASM_TO_PG_ARGS) {
+    PG_RETURN_FLOAT8(value.f64);
 }
 
 static RST_WASM_TO_PG_RET
-wasm_as_datum_to_pg_value(RST_WASM_TO_PG_ARGS) {
-    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
+wasm_externref_to_datum_obj(RST_WASM_TO_PG_ARGS) {
+    return wasm_externref_obj_get_datum(value.gc_obj, oid);
+}
 
-    // Call call_as_datum()
-    wasm_val_t args[1] = { { .kind = WASM_EXTERNREF,
-                             .of.foreign = (uintptr_t)value.gc_obj } };
-    wasm_val_t result;
-    wasm_runtime_call_wasm_a(exec_env, ctx->call_as_datum, 1, &result, 1, args);
-    wasm_struct_obj_t datum_val = (wasm_struct_obj_t)result.of.foreign;
-
-    // Unpack Ref[DatumEnum], a.k.a. Datum
+static RST_WASM_TO_PG_RET
+wasm_i32_array_to_pg_int2_array(RST_WASM_TO_PG_ARGS) {
     wasm_value_t val;
-    wasm_struct_obj_get_field(datum_val, 0, false, &val);
-    datum_val = (wasm_struct_obj_t)val.gc_obj;
-
-    // The first field is the enum type
-    wasm_value_t enum_type;
-    wasm_struct_obj_get_field(datum_val, 0, false, &enum_type);
-    wasm_struct_obj_get_field(datum_val, 1, false, &val);
-    switch (enum_type.i32) {
-        // Value(UInt64)
-        case 0:
-            return UInt64GetDatum(val.u64);
-
-        // Owned(Bytes)
-        case 1:
-            return PointerGetDatum(
-                wasm_array_obj_first_elem_addr((wasm_array_obj_t)val.gc_obj));
-
-        // Ref(RawDatumRef)
-        case 2:
-        {
-            wasm_struct_obj_t raw_datum_ref = (wasm_struct_obj_t)val.gc_obj;
-            wasm_value_t tuple_table_idx;
-            wasm_struct_obj_get_field(raw_datum_ref,
-                                      0,
-                                      false,
-                                      &tuple_table_idx);
-            wasm_value_t row;
-            wasm_struct_obj_get_field(raw_datum_ref, 1, false, &row);
-            wasm_value_t col;
-            wasm_struct_obj_get_field(raw_datum_ref, 2, false, &col);
-
-            return get_tuple_table_value(ctx,
-                                         tuple_table_idx.i32,
-                                         row.i32,
-                                         col.i32);
-        }
-
-        default:
-            ereport(ERROR, errmsg("unknown DatumEnum value"));
+    wasm_struct_obj_get_field((wasm_struct_obj_t)value.gc_obj, 0, false, &val);
+    wasm_array_obj_t fixed_array = (wasm_array_obj_t)val.gc_obj;
+    wasm_struct_obj_get_field((wasm_struct_obj_t)value.gc_obj, 1, false, &val);
+    int len = val.i32;
+    Datum *datum_array = palloc(sizeof(Datum) * len);
+    for (int i = 0; i < len; i++) {
+        wasm_array_obj_get_elem(fixed_array, i, false, &val);
+        datum_array[i] = Int16GetDatum((int16_t)val.i32);
     }
+    ArrayType *array =
+        construct_array(datum_array, len, INT2OID, sizeof(int16), true, 's');
+    PG_RETURN_ARRAYTYPE_P(array);
+}
+
+static RST_WASM_TO_PG_RET
+wasm_i32_array_to_pg_int4_array(RST_WASM_TO_PG_ARGS) {
+    wasm_value_t val;
+    wasm_struct_obj_get_field((wasm_struct_obj_t)value.gc_obj, 0, false, &val);
+    wasm_array_obj_t fixed_array = (wasm_array_obj_t)val.gc_obj;
+    wasm_struct_obj_get_field((wasm_struct_obj_t)value.gc_obj, 1, false, &val);
+    int len = val.i32;
+    Datum *datum_array = palloc(sizeof(Datum) * len);
+    for (int i = 0; i < len; i++) {
+        wasm_array_obj_get_elem(fixed_array, i, false, &val);
+        datum_array[i] = Int32GetDatum(val.i32);
+    }
+    ArrayType *array =
+        construct_array(datum_array, len, INT4OID, sizeof(int32), true, 'i');
+    PG_RETURN_ARRAYTYPE_P(array);
 }
 
 static RST_WASM_TO_PG_RET (*wasm_to_pg_funcs[])(RST_WASM_TO_PG_ARGS) = {
-    wasm_i32_to_pg_bool,         wasm_i32_to_pg_int32,
-    wasm_i64_to_pg_int64,        wasm_bytes_to_pg_text,
-    wasm_bytest_to_pg_timestamp, wasm_as_datum_to_pg_value,
+    wasm_i32_to_pg_bool,
+    wasm_i32_to_pg_int4,
+    wasm_i64_to_pg_int8,
+    wasm_f32_to_pg_float4,
+    wasm_f64_to_pg_float8,
+    wasm_externref_to_datum_obj,
+    wasm_i32_array_to_pg_int2_array,
+    wasm_i32_array_to_pg_int4_array,
 };
 
 static RST_PG_TO_WASM_RET
@@ -151,79 +109,141 @@ pg_bool_to_wasm_i32(RST_PG_TO_WASM_ARGS) {
 }
 
 static RST_PG_TO_WASM_RET
-pg_int32_to_wasm_i32(RST_PG_TO_WASM_ARGS) {
+pg_int4_to_wasm_i32(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value = { .i32 = DatumGetInt32(value) };
     return wasm_value;
 }
 
 static RST_PG_TO_WASM_RET
-pg_int64_to_wasm_i64(RST_PG_TO_WASM_ARGS) {
+pg_int8_to_wasm_i64(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value = { .i64 = DatumGetInt64(value) };
     return wasm_value;
 }
 
 static RST_PG_TO_WASM_RET
-pg_text_to_wasm_bytes(RST_PG_TO_WASM_ARGS) {
-    wasm_value_t wasm_value;
-    text *text_ptr = DatumGetTextPP(value);
-    uint32_t size = VARSIZE_ANY_EXHDR(text_ptr) + 1;
-    WASMArrayObjectRef array_obj =
-        wasm_array_obj_new_with_typeidx(exec_env, type.heap_type, size, NULL);
-    char *data_ptr = wasm_array_obj_first_elem_addr(array_obj);
-    text_to_cstring_buffer(text_ptr, data_ptr, size);
-    wasm_value.gc_obj = (wasm_obj_t)array_obj;
+pg_float4_to_wasm_f32(RST_PG_TO_WASM_ARGS) {
+    wasm_value_t wasm_value = { .f32 = DatumGetFloat4(value) };
     return wasm_value;
 }
 
 static RST_PG_TO_WASM_RET
-pg_timestamp_to_wasm_bytes(RST_PG_TO_WASM_ARGS) {
-    wasm_value_t wasm_value;
-    char *data = DatumGetCString(DirectFunctionCall1(timestamp_out, value));
-    uint32_t size = strlen(data);
-    WASMArrayObjectRef array_obj =
-        wasm_array_obj_new_with_typeidx(exec_env, type.heap_type, size, NULL);
-    char *data_ptr = wasm_array_obj_first_elem_addr(array_obj);
-    memcpy(data_ptr, data, size);
-    wasm_value.gc_obj = (wasm_obj_t)array_obj;
+pg_float8_to_wasm_f64(RST_PG_TO_WASM_ARGS) {
+    wasm_value_t wasm_value = { .f64 = DatumGetFloat8(value) };
     return wasm_value;
 }
 
 static RST_PG_TO_WASM_RET
-pg_value_to_wasm_as_datum(RST_PG_TO_WASM_ARGS) {
+pg_datum_to_wasm_obj(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value;
-    WASMStructObjectRef datum_obj =
+    obj_t obj = rst_obj_new(exec_env, OBJ_DATUM, tuptable, 0);
+    obj->body.datum = value;
+    obj->oid = oid;
+    wasm_value.gc_obj = (wasm_obj_t)rst_externref_of_obj(exec_env, obj);
+    return wasm_value;
+}
+
+static RST_PG_TO_WASM_RET
+pg_int2_array_to_wasm_i32_array(RST_PG_TO_WASM_ARGS) {
+    Datum *datum_array;
+    bool *isnull;
+    int len;
+    deconstruct_array(DatumGetArrayTypeP(value),
+                      INT2OID,
+                      2,
+                      true,
+                      's',
+                      &datum_array,
+                      &isnull,
+                      &len);
+
+    wasm_local_obj_ref_t arr_struct_ref;
+    wasm_struct_obj_t arr_struct =
         wasm_struct_obj_new_with_typeidx(exec_env, type.heap_type);
+    wasm_runtime_push_local_obj_ref(exec_env, &arr_struct_ref);
+    wasm_obj_t arr_obj = (wasm_obj_t)arr_struct;
+    arr_struct_ref.val = arr_obj;
 
-    wasm_value_t field_val;
-    field_val.gc_obj = (wasm_obj_t)tuptable;
-    wasm_struct_obj_set_field(datum_obj, 1, &field_val);
-    field_val.i32 = (int32)row;
-    wasm_struct_obj_set_field(datum_obj, 2, &field_val);
-    field_val.i32 = (int32)col;
-    wasm_struct_obj_set_field(datum_obj, 3, &field_val);
+    wasm_struct_type_t struct_type =
+        (wasm_struct_type_t)wasm_obj_get_defined_type(arr_obj);
+    wasm_ref_type_t fixed_array_type =
+        wasm_struct_type_get_field_type(struct_type, 0, NULL);
+    wasm_array_obj_t fixed_array =
+        wasm_array_obj_new_with_typeidx(exec_env,
+                                        fixed_array_type.heap_type,
+                                        len,
+                                        NULL);
 
-    wasm_value.gc_obj = (wasm_obj_t)datum_obj;
-    return wasm_value;
+    wasm_value_t val = { .gc_obj = (wasm_obj_t)fixed_array };
+    wasm_struct_obj_set_field(arr_struct, 0, &val);
+    val.i32 = len;
+    wasm_struct_obj_set_field(arr_struct, 1, &val);
+
+    for (int i = 0; i < len; i++) {
+        val.i32 = DatumGetInt16(datum_array[i]);
+        wasm_array_obj_set_elem(fixed_array, i, &val);
+    }
+
+    wasm_runtime_pop_local_obj_ref(exec_env);
+    val.gc_obj = arr_obj;
+    return val;
+}
+
+static RST_PG_TO_WASM_RET
+pg_int4_array_to_wasm_i32_array(RST_PG_TO_WASM_ARGS) {
+    Datum *datum_array;
+    bool *isnull;
+    int len;
+    deconstruct_array(DatumGetArrayTypeP(value),
+                      INT4OID,
+                      4,
+                      true,
+                      'i',
+                      &datum_array,
+                      &isnull,
+                      &len);
+
+    wasm_local_obj_ref_t arr_struct_ref;
+    wasm_struct_obj_t arr_struct =
+        wasm_struct_obj_new_with_typeidx(exec_env, type.heap_type);
+    wasm_runtime_push_local_obj_ref(exec_env, &arr_struct_ref);
+    wasm_obj_t arr_obj = (wasm_obj_t)arr_struct;
+    arr_struct_ref.val = arr_obj;
+
+    wasm_struct_type_t struct_type =
+        (wasm_struct_type_t)wasm_obj_get_defined_type(arr_obj);
+    wasm_ref_type_t fixed_array_type =
+        wasm_struct_type_get_field_type(struct_type, 0, NULL);
+    wasm_array_obj_t fixed_array =
+        wasm_array_obj_new_with_typeidx(exec_env,
+                                        fixed_array_type.heap_type,
+                                        len,
+                                        NULL);
+
+    wasm_value_t val = { .gc_obj = (wasm_obj_t)fixed_array };
+    wasm_struct_obj_set_field(arr_struct, 0, &val);
+    val.i32 = len;
+    wasm_struct_obj_set_field(arr_struct, 1, &val);
+
+    for (int i = 0; i < len; i++) {
+        val.i32 = DatumGetInt32(datum_array[i]);
+        wasm_array_obj_set_elem(fixed_array, i, &val);
+    }
+
+    wasm_runtime_pop_local_obj_ref(exec_env);
+    val.gc_obj = arr_obj;
+    return val;
 }
 
 static RST_PG_TO_WASM_RET (*pg_to_wasm_funcs[])(RST_PG_TO_WASM_ARGS) = {
-    pg_bool_to_wasm_i32,        pg_int32_to_wasm_i32,
-    pg_int64_to_wasm_i64,       pg_text_to_wasm_bytes,
-    pg_timestamp_to_wasm_bytes, pg_value_to_wasm_as_datum,
+    pg_bool_to_wasm_i32,
+    pg_int4_to_wasm_i32,
+    pg_int8_to_wasm_i64,
+    pg_float4_to_wasm_f32,
+    pg_float8_to_wasm_f64,
+    pg_datum_to_wasm_obj,
+    pg_int2_array_to_wasm_i32_array,
+    pg_int4_array_to_wasm_i32_array,
 };
-
-static void
-tuple_table_finalizer(const wasm_obj_t obj, void *data) {
-    Context *ctx = (Context *)data;
-    wasm_struct_obj_t tuptable = (wasm_struct_obj_t)obj;
-    wasm_value_t val;
-    wasm_struct_obj_get_field(tuptable, 0, false, &val);
-    if (val.i32 >= 0 && val.i32 < list_length(ctx->tuple_tables)) {
-        ListCell *cell = list_nth_cell(ctx->tuple_tables, val.i32);
-        SPI_freetuptable((SPITupleTable *)lfirst(cell));
-        lfirst(cell) = NULL;
-    }
-}
 
 void
 rst_free_query_plan(QueryPlan *plan) {
@@ -235,8 +255,8 @@ rst_free_query_plan(QueryPlan *plan) {
     }
     if (plan->wasm_to_pg_funcs)
         pfree(plan->wasm_to_pg_funcs);
-    // GOTCHA: plan->pg_to_wasm_funcs and plan->ret_field_types lives
-    // in the same memory allocation.
+    // GOTCHA: plan->pg_to_wasm_funcs, plan->ret_field_types and plan->argtypes
+    // all live in the same memory allocation.
 }
 
 void
@@ -308,24 +328,39 @@ rst_init_query_plan(QueryPlan *plan, HeapTuple query_tup, TupleDesc tupdesc) {
                     "arg_field_fn has different length (%d) than arg_oids (%d)",
                     len,
                     nargs));
-        plan->wasm_to_pg_funcs = (WASM2PGFunc *)MemoryContextAlloc(
-            TopMemoryContext,
-            sizeof(void *) * (nargs + nattrs)
-                + sizeof(wasm_ref_type_t) * nattrs);
-        if (nattrs > 0) {
-            plan->pg_to_wasm_funcs =
-                (PG2WASMFunc *)(plan->wasm_to_pg_funcs + nargs);
-            plan->ret_field_types =
-                (wasm_ref_type_t *)(plan->wasm_to_pg_funcs + nargs + nattrs);
-        }
-        for (int i = 0; i < nargs; i++) {
-            plan->wasm_to_pg_funcs[i] =
-                wasm_to_pg_funcs[DatumGetInt32(datum_array[i])];
+        if (nargs + nattrs > 0) {
+            plan->wasm_to_pg_funcs = (WASM2PGFunc *)MemoryContextAlloc(
+                TopMemoryContext,
+                sizeof(void *) * (nargs + nattrs)
+                    + sizeof(wasm_ref_type_t) * nattrs
+                    + sizeof(Oid) * (nargs + nattrs));
+            if (nattrs > 0) {
+                plan->pg_to_wasm_funcs =
+                    (PG2WASMFunc *)(plan->wasm_to_pg_funcs + nargs);
+                plan->ret_field_types =
+                    (wasm_ref_type_t *)(plan->wasm_to_pg_funcs + nargs
+                                        + nattrs);
+                if (nargs > 0) {
+                    plan->argtypes = (Oid *)(plan->ret_field_types + nattrs);
+                    plan->rettypes = plan->argtypes + nargs;
+                }
+                else {
+                    plan->rettypes = (Oid *)(plan->ret_field_types + nattrs);
+                }
+            }
+            else if (nargs > 0) {
+                plan->argtypes = (Oid *)(plan->wasm_to_pg_funcs + nargs);
+            }
+            for (int i = 0; i < nargs; i++) {
+                plan->wasm_to_pg_funcs[i] =
+                    wasm_to_pg_funcs[DatumGetInt32(datum_array[i])];
+                plan->argtypes[i] = argtypes[i];
+            }
         }
         pfree(datum_array);
 
-        // Take result types
         if (nattrs > 0) {
+            // Take result types
             datum = SPI_getbinval(query_tup, tupdesc, 8, &isnull);
             Assert(!isnull);
             wasm_ref_type_t *ref_type_ptr;
@@ -337,13 +372,34 @@ rst_init_query_plan(QueryPlan *plan, HeapTuple query_tup, TupleDesc tupdesc) {
                               (Datum **)&ref_type_ptr,
                               NULL,
                               &len);
-            if (len != 4)
+            if (len != 3)
                 ereport(ERROR, errmsg("wrong number of ret_type elements"));
-            plan->tuptable_type = ref_type_ptr[0];
-            plan->array_type = ref_type_ptr[1];
-            plan->fixed_array_type = ref_type_ptr[2];
-            plan->ret_type = ref_type_ptr[3];
+            plan->array_type = ref_type_ptr[0];
+            plan->fixed_array_type = ref_type_ptr[1];
+            plan->ret_type = ref_type_ptr[2];
             pfree(ref_type_ptr);
+
+            // Take result OIDs
+            datum = SPI_getbinval(query_tup, tupdesc, 9, &isnull);
+            Assert(!isnull);
+            deconstruct_array(DatumGetArrayTypeP(datum),
+                              INT4OID,
+                              sizeof(int32),
+                              true,
+                              'i',
+                              &datum_array,
+                              NULL,
+                              &len);
+            if (len != nattrs)
+                ereport(ERROR,
+                        errmsg("ret_oids has different length (%d) than "
+                               "described (%d)",
+                               len,
+                               nattrs));
+            for (int i = 0; i < nattrs; i++) {
+                plan->rettypes[i] = DatumGetInt32(datum_array[i]);
+            }
+            pfree(datum_array);
 
             // Take ref types of result fields
             datum = SPI_getbinval(query_tup, tupdesc, 10, &isnull);
@@ -393,7 +449,9 @@ rst_init_query_plan(QueryPlan *plan, HeapTuple query_tup, TupleDesc tupdesc) {
         plan->nattrs = nattrs;
     }
     PG_FINALLY();
-    { debug_query_string = NULL; }
+    {
+        debug_query_string = NULL;
+    }
     PG_END_TRY();
 }
 
@@ -402,9 +460,6 @@ rst_init_instance_context(wasm_exec_env_t exec_env) {
     Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
     wasm_module_inst_t instance = wasm_exec_env_get_module_inst(exec_env);
     wasm_function_inst_t func;
-    if ((func = wasm_runtime_lookup_function(instance, "call_as_datum"))) {
-        ctx->call_as_datum = func;
-    }
     if ((func = wasm_runtime_lookup_function(instance, "get_queries"))) {
         wasm_val_t val;
         wasm_val_t args[1] = { { .kind = WASM_I32, .of.i32 = 0 } };
@@ -427,11 +482,7 @@ rst_init_instance_context(wasm_exec_env_t exec_env) {
 void
 rst_free_instance_context(wasm_exec_env_t exec_env) {
     Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
-    ListCell *cell;
-    foreach (cell, ctx->tuple_tables) {
-        SPI_freetuptable((SPITupleTable *)lfirst(cell));
-    }
-    list_free(ctx->tuple_tables);
+    pfree(ctx->anyref_array->defined_type);
 }
 
 int32_t
@@ -455,39 +506,25 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     Datum values[plan->nargs];
     for (uint32 i = 0; i < plan->nargs; i++) {
         wasm_struct_obj_get_field(args, i, false, &val);
-        values[i] = plan->wasm_to_pg_funcs[i](exec_env, val);
+        values[i] = plan->wasm_to_pg_funcs[i](exec_env, plan->argtypes[i], val);
     }
     SPI_execute_plan(plan->plan, values, NULL, false, 0);
 
     if (plan->nattrs) {
-        // Prepare the TupleTable[T] struct object
-        wasm_struct_obj_t tuptable =
-            wasm_struct_obj_new_with_typeidx(exec_env,
-                                             plan->tuptable_type.heap_type);
-        wasm_value_t query_ret_value = { .gc_obj = (wasm_obj_t)tuptable };
-        wasm_struct_obj_set_field(query, 4, &query_ret_value);
-
-        // Remember the tuple table and setup gc
-        int tuptable_idx = list_length(ctx->tuple_tables);
-        wasm_value_t tuptable_idx_value = { .i32 = tuptable_idx };
-        wasm_struct_obj_set_field(tuptable, 0, &tuptable_idx_value);
-        wasm_obj_set_gc_finalizer(exec_env,
-                                  (wasm_obj_t)tuptable,
-                                  tuple_table_finalizer,
-                                  ctx);
-        MemoryContext tx_mctx = MemoryContextSwitchTo(TopMemoryContext);
-        PG_TRY();
-        { ctx->tuple_tables = lappend(ctx->tuple_tables, SPI_tuptable); }
-        PG_FINALLY();
-        { MemoryContextSwitchTo(tx_mctx); }
-        PG_END_TRY();
+        obj_t obj = rst_obj_new(exec_env, OBJ_TUPLE_TABLE, NULL, 0);
+        obj->flags |= OBJ_OWNS_BODY;
+        obj->body.tuptable = SPI_tuptable;
+        wasm_obj_t tuptable = rst_anyref_of_obj(exec_env, obj);
+        wasm_local_obj_ref_t local_ref;
+        wasm_runtime_push_local_obj_ref(exec_env, &local_ref);
+        local_ref.val = tuptable;
 
         // $@moonbitlang/core/builtin.Array<T> - struct
         wasm_struct_obj_t rows_struct =
             wasm_struct_obj_new_with_typeidx(exec_env,
                                              plan->array_type.heap_type);
         wasm_value_t rows_struct_value = { .gc_obj = (wasm_obj_t)rows_struct };
-        wasm_struct_obj_set_field(tuptable, 1, &rows_struct_value);
+        wasm_struct_obj_set_field(query, 4, &rows_struct_value);
 
         // $FixedArray<UnsafeMaybeUninit<T>>
         wasm_array_obj_t rows_arr =
@@ -519,35 +556,16 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
                 wasm_value_t col_value =
                     plan->pg_to_wasm_funcs[j](binval,
                                               tuptable,
-                                              i,
-                                              j,
+                                              plan->rettypes[j],
                                               exec_env,
                                               plan->ret_field_types[j]);
                 wasm_struct_obj_set_field(row, j, &col_value);
             }
         }
+
+        // all values are copied, so we can free the tuptable early
+        wasm_runtime_remove_local_obj_ref(exec_env, &local_ref);
     }
 
     return 1;
-}
-
-WASMArrayObjectRef
-env_detoast(wasm_exec_env_t exec_env,
-            int32_t tuptable_idx,
-            int32_t row,
-            int32_t col) {
-    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
-    Datum pg_value = get_tuple_table_value(ctx, tuptable_idx, row, col);
-    struct varlena *pg_var = PG_DETOAST_DATUM_PACKED(pg_value);
-    uint32_t size = VARSIZE_ANY(pg_var);
-    WASMArrayObjectRef buf =
-        wasm_array_obj_new_with_typeidx(exec_env,
-                                        ctx->module->heap_types.bytes,
-                                        size,
-                                        NULL);
-    char *view = wasm_array_obj_first_elem_addr(buf);
-    memcpy(view, VARDATA_ANY(pg_var), size);
-    if ((void *)pg_var != DatumGetPointer(pg_value))
-        pfree(pg_var);
-    return buf;
 }

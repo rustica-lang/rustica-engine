@@ -103,16 +103,7 @@ OBJS = \
     $(LLHTTP_SRC)/src/api.o \
     $(LLHTTP_SRC)/src/http.o \
     $(LLHTTP_SRC)/src/llhttp.o \
-	src/rustica/compiler.o \
-	src/rustica/main.o \
-	src/rustica/gucs.o \
-	src/rustica/event_set.o \
-	src/rustica/module.o \
-	src/rustica/worker.o \
-	src/rustica/query.o \
-	src/rustica/wamr.o \
-	src/rustica/utils.o \
-	src/rustica/master.o
+    $(patsubst %.c,%.o,$(shell find src -type f -name "*.c"))
 
 WAMR_DEFINES = \
 	-DBUILD_TARGET_X86_64 \
@@ -227,7 +218,6 @@ endif
 
 PG_CFLAGS += \
 	-Wno-vla \
-	-Wno-incompatible-pointer-types \
 	-Wno-int-conversion \
 	-Wno-declaration-after-statement \
 	-Wno-missing-prototypes \
@@ -266,6 +256,7 @@ $(WAMR_DIR)/.stub: $(WAMR_TARBALL)
 	patch -p1 -d $(WAMR_DIR) < patches/0002-wamrc-allow-building-without-DUMP_CALL_STACK.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0003-fix-parameter-handling-in-wasm_loader-with-GC-enable.patch
 	patch -p1 -d $(WAMR_DIR) < patches/0004-Tweak-submodule-loading-hooks.patch
+	patch -p1 -d $(WAMR_DIR) < patches/0005-Support-custom-global-resolver.patch
 	echo > $(WAMR_DIR)/.stub
 ifeq ($(BUNDLE_LLVM),1)
 	cd $(WAMR_DIR)/wamr-compiler && python3 -m pip install -r ../build-scripts/requirements.txt && python3 ../build-scripts/build_llvm.py

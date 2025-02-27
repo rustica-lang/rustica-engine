@@ -39,20 +39,24 @@
 
 typedef enum wasm_to_pg_fn {
     wasm_i32_to_pg_bool,
-    wasm_i32_to_pg_int32,
-    wasm_i64_to_pg_int64,
-    wasm_bytes_to_pg_text,
-    wasm_bytest_to_pg_timestamp,
-    wasm_as_datum_to_pg_value,
+    wasm_i32_to_pg_int4,
+    wasm_i64_to_pg_int8,
+    wasm_f32_to_pg_float4,
+    wasm_f64_to_pg_float8,
+    wasm_externref_to_datum_obj,
+    wasm_i32_array_to_pg_int2_array,
+    wasm_i32_array_to_pg_int4_array,
 } wasm_to_pg_fn;
 
 typedef enum pg_to_wasm_fn {
     pg_bool_to_wasm_i32,
-    pg_int32_to_wasm_i32,
-    pg_int64_to_wasm_i64,
-    pg_text_to_wasm_bytes,
-    pg_timestamp_to_wasm_bytes,
-    pg_value_to_wasm_as_datum,
+    pg_int4_to_wasm_i32,
+    pg_int8_to_wasm_i64,
+    pg_float4_to_wasm_f32,
+    pg_float8_to_wasm_f64,
+    pg_datum_to_wasm_obj,
+    pg_int2_array_to_wasm_i32_array,
+    pg_int4_array_to_wasm_i32_array,
 } pg_to_wasm_fn;
 
 static Datum
@@ -63,11 +67,6 @@ run_and_compile(wasm_module_t module,
                 Oid query_oid,
                 Datum *heap_types,
                 Datum *queries);
-
-static void
-compile_call_as_datum(CommonHeapTypes *heap_types,
-                      wasm_func_type_t func_type,
-                      wasm_module_t module);
 
 static Datum
 compile_queries(CommonHeapTypes *heap_types,
@@ -89,12 +88,14 @@ compile_query(CommonHeapTypes *heap_types,
               wasm_struct_obj_t query);
 
 static wasm_to_pg_fn
-wasm_to_pg(CommonHeapTypes *heap_types, wasm_ref_type_t ref_type, Oid pg_type);
+wasm_to_pg(wasm_exec_env_t exec_env,
+           CommonHeapTypes *heap_types,
+           wasm_ref_type_t ref_type,
+           Oid pg_type);
 
 static pg_to_wasm_fn
 pg_to_wasm(wasm_exec_env_t exec_env,
            CommonHeapTypes *heap_types,
-           wasm_ref_type_t tuptable_type,
            Oid pg_type,
            wasm_ref_type_t ref_type);
 
@@ -102,7 +103,8 @@ static bool
 validate_moonbit_array(wasm_ref_type_t ref_type,
                        wasm_module_t module,
                        wasm_ref_type_t *rv,
-                       wasm_ref_type_t *fixed_array);
+                       wasm_ref_type_t *fixed_array,
+                       bool nullable);
 
 static List *
 describe_query_results(char *sql, Oid *argtypes, int nargs);
@@ -201,8 +203,8 @@ rst_compile(PG_FUNCTION_ARGS) {
             bool isnull;
             tid_map[i].tid = DatumGetUUIDP(GetAttributeByNum(pair, 1, &isnull));
             Assert(!isnull);
-            tid_map[i].oid =
-                DatumGetObjectId(GetAttributeByNum(pair, 2, &isnull));
+            tid_map[i].oid = getBaseType(
+                DatumGetObjectId(GetAttributeByNum(pair, 2, &isnull)));
             Assert(!isnull);
         }
     }
@@ -210,6 +212,11 @@ rst_compile(PG_FUNCTION_ARGS) {
     TupleDesc rv_tupdesc;
     Datum rv[3] = { 0 };
     wasm_module_t module = NULL;
+
+    // The backdoor API may create nested WAMR runtime, so stash the parent env
+    wasm_exec_env_t prev_exec_env = wasm_runtime_get_exec_env_tls();
+    wasm_runtime_set_exec_env_tls(NULL);
+
     PG_TRY();
     {
         module = wasm_runtime_load((uint8 *)VARDATA_ANY(wasm),
@@ -243,6 +250,7 @@ rst_compile(PG_FUNCTION_ARGS) {
         pfree(tid_map);
         tid_map = NULL;
         tid_map_len = 0;
+        wasm_runtime_set_exec_env_tls(prev_exec_env);
     }
     PG_END_TRY();
 
@@ -262,8 +270,6 @@ run_and_compile(wasm_module_t module,
     CommonHeapTypes heap_types;
     memset(&heap_types, -1, sizeof(heap_types));
     wasm_func_type_t func_type;
-    if ((func_type = wasm_module_lookup_exported_func(module, "call_as_datum")))
-        compile_call_as_datum(&heap_types, func_type, module);
     if ((func_type = wasm_module_lookup_exported_func(module, "get_queries")))
         *queries_out =
             compile_queries(&heap_types, query_oid, func_type, module);
@@ -286,48 +292,6 @@ run_and_compile(wasm_module_t module,
                                                          sizeof(int32_t),
                                                          true,
                                                          'i'));
-}
-
-static void
-compile_call_as_datum(CommonHeapTypes *heap_types,
-                      wasm_func_type_t func_type,
-                      wasm_module_t module) {
-    if (wasm_func_type_get_param_count(func_type) != 1)
-        ereport(ERROR, errmsg("call_as_datum() must have exactly 1 argument"));
-    if (wasm_func_type_get_result_count(func_type) != 1)
-        ereport(ERROR, errmsg("call_as_datum() must return exactly 1 value"));
-
-    // datum_type: Ref[DatumEnum]
-    wasm_ref_type_t datum_ref_type =
-        wasm_func_type_get_result_type(func_type, 0);
-    wasm_struct_type_t datum_type =
-        wasm_ref_type_get_referred_struct(datum_ref_type, module, false);
-    if (!datum_type)
-        ereport(ERROR, errmsg("call_as_datum() must return a struct"));
-    if (wasm_struct_type_get_field_count(datum_type) != 1)
-        ereport(ERROR, errmsg("call_as_datum() must return a Ref"));
-    wasm_struct_type_t datum_enum_type = wasm_ref_type_get_referred_struct(
-        wasm_struct_type_get_field_type(datum_type, 0, NULL),
-        module,
-        false);
-    if (!datum_enum_type)
-        ereport(ERROR, errmsg("call_as_datum() must return a Ref of struct"));
-    if (datum_enum_type->base_type.is_sub_final)
-        ereport(
-            ERROR,
-            errmsg("call_as_datum() must return a Ref of non-final struct"));
-    if (wasm_struct_type_get_field_count(datum_enum_type) != 1)
-        ereport(ERROR,
-                errmsg("call_as_datum() must return a Ref of 1-field struct"));
-    if (wasm_struct_type_get_field_type(datum_enum_type, 0, NULL).value_type
-        != VALUE_TYPE_I32)
-        ereport(ERROR,
-                errmsg("call_as_datum() must return a Ref of $moonbit.enum"));
-    heap_types->datum = datum_ref_type.heap_type;
-
-    // AsDatum can be any type, but usually a trait object type
-    heap_types->as_datum =
-        wasm_func_type_get_param_type(func_type, 0).heap_type;
 }
 
 static Datum
@@ -486,7 +450,7 @@ compile_query_type(CommonHeapTypes *heap_types,
 
     // third field: MoonBit array of query argument OIDs
     ref_type = wasm_struct_type_get_field_type(query_type, 2, NULL);
-    if (!validate_moonbit_array(ref_type, module, &ref_type, NULL))
+    if (!validate_moonbit_array(ref_type, module, &ref_type, NULL, false))
         ereport(ERROR, errmsg("third field of Query must be an array"));
     if (ref_type.value_type != VALUE_TYPE_I32)
         ereport(ERROR, errmsg("third field of Query must be an array of i32"));
@@ -529,35 +493,18 @@ compile_query_type(CommonHeapTypes *heap_types,
                                                         true,
                                                         'i'));
 
-    // fifth field: optional TupleTable of struct or MoonBit Unit for result
+    // fifth field: optional Array of struct or MoonBit Unit for result
     ref_type = wasm_struct_type_get_field_type(query_type, 4, NULL);
-    wasm_struct_type_t tuptable_type =
-        wasm_ref_type_get_referred_struct(ref_type, module, true);
-    if (!tuptable_type)
-        ereport(ERROR,
-                errmsg("fifth field of Query must be a nullable struct"));
-    if (wasm_struct_type_get_field_count(tuptable_type) != 2)
-        ereport(ERROR, errmsg("TupleTable must have 2 fields"));
-    Datum ret_type[4]; // all ref types of a TupTable[T] (+Array[T],
-                       // +FixedArray[T], +T)
+    Datum ret_type[3]; // all ref types of an Array[T] (+FixedArray[T], +T)
     ret_type[0] = Int64GetDatum(*(int64 *)&ref_type);
-
-    // first field of TupleTable is the tuptable idx
-    ref_type = wasm_struct_type_get_field_type(tuptable_type, 0, NULL);
-    if (ref_type.value_type != VALUE_TYPE_I32)
-        ereport(ERROR, errmsg("first field of TupleTable must be i32"));
-
-    // second field of TupleTable is a MoonBit Array of a struct or Unit
-    uint32 nattrs;
-    wasm_struct_type_t ret_struct_type;
-    ref_type = wasm_struct_type_get_field_type(tuptable_type, 1, NULL);
-    ret_type[1] = Int64GetDatum(*(int64 *)&ref_type);
     if (!validate_moonbit_array(ref_type,
                                 module,
                                 &ref_type,
-                                (wasm_ref_type_t *)&ret_type[2]))
-        ereport(ERROR,
-                errmsg("second field of TupleTable must be a MoonBit Array"));
+                                (wasm_ref_type_t *)&ret_type[1],
+                                true))
+        ereport(ERROR, errmsg("fifth field of Query must be a MoonBit array"));
+    uint32 nattrs;
+    wasm_struct_type_t ret_struct_type;
     if (ref_type.value_type == VALUE_TYPE_I32) {
         // This is MoonBit Unit
         nattrs = 0;
@@ -568,12 +515,12 @@ compile_query_type(CommonHeapTypes *heap_types,
     }
     else
         ereport(ERROR,
-                errmsg("second field of TupleTable must be a MoonBit Array of "
+                errmsg("fifth field of Query must be a MoonBit Array of "
                        "nullable struct or Unit"));
-    ret_type[3] = Int64GetDatum(*(int64 *)&ref_type);
+    ret_type[2] = Int64GetDatum(*(int64 *)&ref_type);
 
     // Build ret_type array
-    dims[0] = 4;
+    dims[0] = 3;
     query_attrs[7] = PointerGetDatum(construct_md_array(ret_type,
                                                         NULL,
                                                         1,
@@ -678,7 +625,7 @@ compile_query(CommonHeapTypes *heap_types,
     // 6. arg_field_fn: int[]
     for (int i = 0; i < nargs; i++) {
         wasm_to_pg_fn fn =
-            wasm_to_pg(heap_types, arg_field_types[i], argtypes[i]);
+            wasm_to_pg(exec_env, heap_types, arg_field_types[i], argtypes[i]);
         args_array[i] = Int32GetDatum(fn);
     }
     pfree(arg_field_types);
@@ -691,21 +638,6 @@ compile_query(CommonHeapTypes *heap_types,
                                                         sizeof(int32_t),
                                                         true,
                                                         'i'));
-
-    // Re-read ret_type ref_types for tuptable_type
-    wasm_ref_type_t *ret_type;
-    int ret_type_len;
-    deconstruct_array(DatumGetArrayTypeP(query_attrs[7]),
-                      INT8OID,
-                      sizeof(int64),
-                      true,
-                      'i',
-                      (Datum **)&ret_type,
-                      NULL,
-                      &ret_type_len);
-    Assert(ret_type_len == 4);
-    wasm_ref_type_t tuptable_type = ret_type[0];
-    pfree(ret_type);
 
     // Re-read the compiled array ret_field_types
     int nattrs;
@@ -752,7 +684,6 @@ compile_query(CommonHeapTypes *heap_types,
     for (i = 0; i < nattrs; i++) {
         int fn = pg_to_wasm(exec_env,
                             heap_types,
-                            tuptable_type,
                             DatumGetInt32(ret_array[i]),
                             ret_field_types[i]);
         ret_array[i] = Int32GetDatum(fn);
@@ -770,11 +701,10 @@ compile_query(CommonHeapTypes *heap_types,
 }
 
 static wasm_to_pg_fn
-wasm_to_pg(CommonHeapTypes *heap_types, wasm_ref_type_t ref_type, Oid pg_type) {
-    // AsDatum can be converted to Datum directly
-    if (ref_type.heap_type == heap_types->as_datum)
-        return wasm_as_datum_to_pg_value;
-
+wasm_to_pg(wasm_exec_env_t exec_env,
+           CommonHeapTypes *heap_types,
+           wasm_ref_type_t ref_type,
+           Oid pg_type) {
     switch (pg_type) {
         case BOOLOID:
             if (ref_type.value_type == VALUE_TYPE_I32)
@@ -782,31 +712,61 @@ wasm_to_pg(CommonHeapTypes *heap_types, wasm_ref_type_t ref_type, Oid pg_type) {
             break;
 
         case INT4OID:
+        case DATEOID:
             if (ref_type.value_type == VALUE_TYPE_I32)
-                return wasm_i32_to_pg_int32;
+                return wasm_i32_to_pg_int4;
             break;
 
         case INT8OID:
             switch (ref_type.value_type) {
                 case VALUE_TYPE_I64:
-                    return wasm_i64_to_pg_int64;
+                    return wasm_i64_to_pg_int8;
 
                 case VALUE_TYPE_I32:
-                    return wasm_i32_to_pg_int32;
-            }
-            break;
-
-        case TEXTOID:
-        case VARCHAROID:
-            if (wasm_is_type_multi_byte_type(ref_type.value_type)) {
-                if (ref_type.heap_type == heap_types->bytes)
-                    return wasm_bytes_to_pg_text;
+                    return wasm_i32_to_pg_int4;
             }
             break;
 
         case TIMESTAMPOID:
-            if (wasm_is_type_multi_byte_type(ref_type.value_type))
-                return wasm_bytest_to_pg_timestamp;
+        case TIMESTAMPTZOID:
+        case TIMEOID:
+            if (ref_type.value_type == VALUE_TYPE_I64)
+                return wasm_i64_to_pg_int8;
+            break;
+
+        case FLOAT4OID:
+            if (ref_type.value_type == VALUE_TYPE_F32)
+                return wasm_f32_to_pg_float4;
+            break;
+
+        case FLOAT8OID:
+            if (ref_type.value_type == VALUE_TYPE_F64)
+                return wasm_f64_to_pg_float8;
+            break;
+
+        case TEXTOID:
+        case VARCHAROID:
+        case UUIDOID:
+        case JSONOID:
+        case JSONBOID:
+        case BYTEAOID:
+        case INTERVALOID:
+            if (wasm_is_reftype_externref(ref_type.value_type)
+                || ref_type.heap_type == HEAP_TYPE_EXTERN)
+                return wasm_externref_to_datum_obj;
+            break;
+
+        case INT2ARRAYOID:
+        case INT4ARRAYOID:
+            if (validate_moonbit_array(ref_type,
+                                       wasm_exec_env_get_module(exec_env),
+                                       &ref_type,
+                                       NULL,
+                                       false))
+                if (ref_type.value_type == VALUE_TYPE_I32)
+                    return pg_type == INT2ARRAYOID
+                               ? wasm_i32_array_to_pg_int2_array
+                               : wasm_i32_array_to_pg_int4_array;
             break;
 
         default:
@@ -821,25 +781,8 @@ wasm_to_pg(CommonHeapTypes *heap_types, wasm_ref_type_t ref_type, Oid pg_type) {
 static pg_to_wasm_fn
 pg_to_wasm(wasm_exec_env_t exec_env,
            CommonHeapTypes *heap_types,
-           wasm_ref_type_t tuptable_type,
            Oid pg_type,
            wasm_ref_type_t ref_type) {
-    wasm_module_t module = wasm_exec_env_get_module(exec_env);
-
-    // Check if ref_type is an InnerDatumRef
-    wasm_struct_type_t maybe_datum_type =
-        wasm_ref_type_get_referred_struct(ref_type, module, false);
-    if (maybe_datum_type
-        && wasm_struct_type_get_field_count(maybe_datum_type) == 4
-        && wasm_struct_type_get_field_type(maybe_datum_type, 1, NULL).heap_type
-               == tuptable_type.heap_type
-        && wasm_struct_type_get_field_type(maybe_datum_type, 2, NULL).value_type
-               == VALUE_TYPE_I32
-        && wasm_struct_type_get_field_type(maybe_datum_type, 3, NULL).value_type
-               == VALUE_TYPE_I32) {
-        return pg_value_to_wasm_as_datum;
-    }
-
     switch (pg_type) {
         case BOOLOID:
             if (ref_type.value_type == VALUE_TYPE_I32)
@@ -847,25 +790,52 @@ pg_to_wasm(wasm_exec_env_t exec_env,
             break;
 
         case INT4OID:
+        case DATEOID:
             if (ref_type.value_type == VALUE_TYPE_I32)
-                return pg_int32_to_wasm_i32;
+                return pg_int4_to_wasm_i32;
             break;
 
         case INT8OID:
+        case TIMESTAMPOID:
+        case TIMESTAMPTZOID:
+        case TIMEOID:
             if (ref_type.value_type == VALUE_TYPE_I64)
-                return pg_int64_to_wasm_i64;
+                return pg_int8_to_wasm_i64;
+            break;
+
+        case FLOAT4OID:
+            if (ref_type.value_type == VALUE_TYPE_F32)
+                return pg_float4_to_wasm_f32;
+            break;
+
+        case FLOAT8OID:
+            if (ref_type.value_type == VALUE_TYPE_F64)
+                return pg_float8_to_wasm_f64;
             break;
 
         case TEXTOID:
         case VARCHAROID:
-            if (wasm_is_type_multi_byte_type(ref_type.value_type)
-                && ref_type.heap_type == heap_types->bytes)
-                return pg_text_to_wasm_bytes;
+        case UUIDOID:
+        case JSONOID:
+        case JSONBOID:
+        case BYTEAOID:
+        case INTERVALOID:
+            if (wasm_is_reftype_externref(ref_type.value_type)
+                || ref_type.heap_type == HEAP_TYPE_EXTERN)
+                return pg_datum_to_wasm_obj;
             break;
 
-        case TIMESTAMPOID:
-            if (wasm_is_type_multi_byte_type(ref_type.value_type))
-                return pg_timestamp_to_wasm_bytes;
+        case INT2ARRAYOID:
+        case INT4ARRAYOID:
+            if (validate_moonbit_array(ref_type,
+                                       wasm_exec_env_get_module(exec_env),
+                                       &ref_type,
+                                       NULL,
+                                       false))
+                if (ref_type.value_type == VALUE_TYPE_I32)
+                    return pg_type == INT2ARRAYOID
+                               ? pg_int2_array_to_wasm_i32_array
+                               : pg_int4_array_to_wasm_i32_array;
             break;
 
         default:
@@ -881,10 +851,11 @@ static bool
 validate_moonbit_array(wasm_ref_type_t ref_type,
                        wasm_module_t module,
                        wasm_ref_type_t *rv,
-                       wasm_ref_type_t *fixed_array) {
+                       wasm_ref_type_t *fixed_array,
+                       bool nullable) {
     // MoonBit Array is a struct of 2 fields
     wasm_struct_type_t array_struct =
-        wasm_ref_type_get_referred_struct(ref_type, module, false);
+        wasm_ref_type_get_referred_struct(ref_type, module, nullable);
     if (!array_struct)
         return false;
     if (wasm_struct_type_get_field_count(array_struct) != 2)

@@ -14,22 +14,15 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#include <wchar.h>
-
 #include "postgres.h"
+#include "catalog/pg_type_d.h"
+
 #include "wasm_runtime_common.h"
+#include "wasm_c_api.h"
 #include "aot_runtime.h"
 
+#include "rustica/datatypes.h"
 #include "rustica/wamr.h"
-
-static void
-spectest_print_char(wasm_exec_env_t exec_env, int c) {
-    fwprintf(stderr, L"%lc", c);
-}
-
-static NativeSymbol spectest[] = {
-    { "print_char", spectest_print_char, "(i)" }
-};
 
 static void
 native_noop(wasm_exec_env_t exec_env) {}
@@ -37,18 +30,37 @@ native_noop(wasm_exec_env_t exec_env) {}
 TidOid *tid_map = NULL;
 int tid_map_len = 0;
 
-static int32_t
-env_tid_to_oid(wasm_exec_env_t exec_env, WASMArrayObjectRef tid_bytes) {
+int32_t
+env_tid_to_oid(wasm_exec_env_t exec_env, wasm_obj_t obj) {
     if (tid_map == NULL || tid_map_len == 0)
         return 0;
-    // UUID must be 16-bytes
-    if (wasm_array_obj_length(tid_bytes) != 16)
-        return 0;
-    pg_uuid_t *tid = wasm_array_obj_first_elem_addr(tid_bytes);
+    pg_uuid_t *tid = DatumGetUUIDP(wasm_externref_obj_get_datum(obj, UUIDOID));
     for (int i = 0; i < tid_map_len; i++) {
         if (memcmp(tid_map[i].tid->data, tid->data, UUID_LEN) == 0) {
             return (int32_t)tid_map[i].oid;
         }
+    }
+    return 0;
+}
+
+int32_t
+env_ereport(wasm_exec_env_t exec_env, int32_t level, wasm_obj_t ref) {
+    if (level == ERROR) {
+        char *msg = wasm_text_copy_cstring(ref);
+        ereport(WARNING,
+                (errhidestmt(true),
+                 errmsg_internal("WASM application panicked: %s", msg)));
+        wasm_runtime_set_exception(wasm_exec_env_get_module_inst(exec_env),
+                                   msg);
+        pfree(msg);
+    }
+    else {
+        Datum str = wasm_externref_obj_get_datum(ref, TEXTOID);
+        text *t = DatumGetTextPP(str);
+        char *msg = VARDATA_ANY(t);
+        int size = VARSIZE_ANY_EXHDR(t);
+        ereport(level, (errhidestmt(true), errmsg_internal("%.*s", size, msg)));
+        RST_FREE_IF_COPY(t, str);
     }
     return 0;
 }
@@ -65,7 +77,7 @@ NativeSymbol rst_noop_native_env[] = {
     { "llhttp_get_http_major", native_noop, "()i" },
     { "llhttp_get_http_minor", native_noop, "()i" },
     { "execute_statement", native_noop, "(i)i" },
-    { "detoast", native_noop, "(iii)r" },
+    { "ereport", env_ereport, "(ir)i" },
     { "tid_to_oid", env_tid_to_oid, "(r)i" },
 #ifdef RUSTICA_SQL_BACKDOOR
     { "sql_backdoor", native_noop, "(rii)r" },
@@ -84,15 +96,16 @@ rst_init_wamr() {
                                   .gc_heap_size = 16 * 1024 * 1024 };
     if (!wasm_runtime_full_init(&init_args))
         ereport(FATAL, (errmsg("cannot register WASM natives")));
-    if (!wasm_runtime_register_natives("spectest",
-                                       spectest,
-                                       sizeof(spectest) / sizeof(spectest[0])))
-        ereport(ERROR, errmsg("cannot register WASM natives"));
-    if (!wasm_runtime_register_natives("env",
-                                       rst_noop_native_env,
-                                       sizeof(rst_noop_native_env)
-                                           / sizeof(rst_noop_native_env[0])))
-        ereport(ERROR, errmsg("cannot instantiate WASM module"));
+    REGISTER_WASM_NATIVES("env", rst_noop_native_env);
+    rst_register_natives_bytea();
+    rst_register_natives_date();
+    rst_register_natives_jsonb();
+    rst_register_natives_json();
+    rst_register_natives_primitives();
+    rst_register_natives_stringbuilder();
+    rst_register_natives_text();
+    rst_register_natives_timestamp();
+    rst_register_natives_uuid();
 }
 
 void
@@ -187,10 +200,6 @@ wasm_ref_type_repr(CommonHeapTypes *heap_types, wasm_ref_type_t ref_type) {
             int32_t heap_type = ref_type.heap_type;
             if (heap_type == heap_types->bytes)
                 return "ref $moonbit.bytes";
-            if (heap_type == heap_types->datum)
-                return "ref $Ref<DatumEnum>";
-            if (heap_type == heap_types->as_datum)
-                return "ref $AsDatum";
             return "ref <unknown>";
         }
         case VALUE_TYPE_HT_NULLABLE_REF:
@@ -198,10 +207,6 @@ wasm_ref_type_repr(CommonHeapTypes *heap_types, wasm_ref_type_t ref_type) {
             int32_t heap_type = ref_type.heap_type;
             if (heap_type == heap_types->bytes)
                 return "ref null $moonbit.bytes";
-            if (heap_type == heap_types->datum)
-                return "ref null $Ref<DatumEnum>";
-            if (heap_type == heap_types->as_datum)
-                return "ref null $AsDatum";
             return "ref null <unknown>";
         }
 
@@ -229,4 +234,21 @@ wasm_runtime_unregister_and_unload(wasm_module_t module) {
         wasm_unload((WASMModule *)module);
     if (module->module_type == Wasm_Module_AoT)
         aot_unload((AOTModule *)module);
+}
+
+void
+wasm_runtime_remove_local_obj_ref(wasm_exec_env_t exec_env,
+                                  wasm_local_obj_ref_t *me) {
+    wasm_local_obj_ref_t *current =
+        wasm_runtime_get_cur_local_obj_ref(exec_env);
+    if (current == me)
+        wasm_runtime_pop_local_obj_ref(exec_env);
+    else {
+        wasm_local_obj_ref_t *next;
+        while (current != me) {
+            next = current;
+            current = current->prev;
+        }
+        next->prev = me->prev;
+    }
 }

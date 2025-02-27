@@ -32,6 +32,7 @@
 
 #include "llhttp.h"
 
+#include "rustica/datatypes.h"
 #include "rustica/gucs.h"
 #include "rustica/module.h"
 #include "rustica/query.h"
@@ -214,21 +215,23 @@ env_sql_backdoor(wasm_exec_env_t exec_env,
         if (SPI_execute(view, false, 0) < 0)
             ereport(ERROR, errmsg("SPI_execute failed"));
         bool isnull = true;
-        TupleDesc tupdesc = SPI_tuptable->tupdesc;
         Datum datum;
-        if (SPI_tuptable->numvals == 1 && tupdesc->natts == 1
-            && tupdesc->attrs[0].atttypid == JSONBOID) {
-            datum = SPI_getbinval(SPI_tuptable->vals[0],
-                                  SPI_tuptable->tupdesc,
-                                  1,
-                                  &isnull);
+        if (SPI_tuptable != NULL) {
+            TupleDesc tupdesc = SPI_tuptable->tupdesc;
+            if (SPI_tuptable->numvals == 1 && tupdesc->natts == 1
+                && tupdesc->attrs[0].atttypid == JSONBOID) {
+                datum = SPI_getbinval(SPI_tuptable->vals[0],
+                                      SPI_tuptable->tupdesc,
+                                      1,
+                                      &isnull);
+            }
         }
         if (isnull) {
             resp = "null";
         }
         else {
             Jsonb *json = DatumGetJsonbP(datum);
-            resp = JsonbToCString(NULL, &json->root, VARSIZE(json));
+            resp = JsonbToCString(NULL, &json->root, VARSIZE_ANY_EXHDR(json));
         }
     }
     PG_CATCH();
@@ -265,8 +268,9 @@ static NativeSymbol native_env[] = {
     { "llhttp_get_http_major", env_llhttp_get_http_major, "()i" },
     { "llhttp_get_http_minor", env_llhttp_get_http_minor, "()i" },
     { "execute_statement", env_execute_statement, "(i)i" },
-    { "detoast", env_detoast, "(iii)r" },
+    { "ereport", env_ereport, "(ir)i" },
 #ifdef RUSTICA_SQL_BACKDOOR
+    { "tid_to_oid", env_tid_to_oid, "(r)i" },
     { "sql_backdoor", env_sql_backdoor, "(rii)r" },
 #endif
 };
@@ -652,87 +656,64 @@ on_readable() {
     // Prepare to handle the connection
     bool spi_connected = false;
     wasm_exec_env_t exec_env = NULL;
+    bool success = false;
 
     PG_TRY();
     {
-        PG_TRY(2);
-        {
-            if (rst_database == NULL)
-                ereport(ERROR,
-                        errcode(ERRCODE_NO_DATA_FOUND),
-                        errmsg("rustica.database is never configured"));
+        if (rst_database == NULL)
+            ereport(ERROR,
+                    errcode(ERRCODE_NO_DATA_FOUND),
+                    errmsg("rustica.database is never configured"));
 
-            // Connect to SPI
-            SetCurrentStatementStartTimestamp();
-            StartTransactionCommand();
-            SPI_connect();
-            PushActiveSnapshot(GetTransactionSnapshot());
-            spi_connected = true;
+        // Connect to SPI
+        SetCurrentStatementStartTimestamp();
+        StartTransactionCommand();
+        SPI_connect();
+        PushActiveSnapshot(GetTransactionSnapshot());
+        spi_connected = true;
 
-            // Load module if it's not loaded already
-            const char *name = "main";
-            PreparedModule *pmod = rst_lookup_module(name);
-            if (!pmod) {
-                pgstat_report_activity(STATE_RUNNING,
-                                       "loading WASM application");
-                ereport(
-                    DEBUG1,
+        // Load module if it's not loaded already
+        const char *name = "main";
+        PreparedModule *pmod = rst_lookup_module(name);
+        if (!pmod) {
+            pgstat_report_activity(STATE_RUNNING, "loading WASM application");
+            ereport(DEBUG1,
                     errmsg("rustica-%d: load module \"%s\"", worker_id, name));
-                pmod = rst_prepare_module(name, NULL, NULL);
-            }
-
-            // Instantiate the WASM module
-            pgstat_report_activity(STATE_RUNNING, "running WASM application");
-            exec_env = rst_module_instantiate(pmod, 256 * 1024, 1024 * 1024);
-
-            // Prepare context for execution
-            Context context = { .fd = client, .module = pmod };
-            wasm_runtime_set_user_data(exec_env, &context);
-            context.wait_set = CreateWaitEventSet(CurrentMemoryContext, 2);
-            AddWaitEventToSet(context.wait_set,
-                              WL_LATCH_SET,
-                              PGINVALID_SOCKET,
-                              MyLatch,
-                              NULL);
-            AddWaitEventToSet(context.wait_set,
-                              WL_SOCKET_CLOSED,
-                              client,
-                              NULL,
-                              NULL);
-
-            // Initialize context
-            rst_init_instance_context(exec_env);
-            wasm_module_inst_t instance =
-                wasm_exec_env_get_module_inst(exec_env);
-            init_llhttp(&context, instance);
-            context.http_parser.data = exec_env;
-
-            // Run the WASM module instance
-            wasm_function_inst_t start_func =
-                wasm_runtime_lookup_function(instance, "_start");
-            if (!start_func)
-                ereport(ERROR, errmsg("cannot find WASM entrypoint"));
-            if (!wasm_runtime_call_wasm(exec_env, start_func, 0, NULL))
-                ereport(ERROR, errmsg("failed to run WASM application"));
+            pmod = rst_prepare_module(name, NULL, NULL);
         }
-        PG_CATCH(2);
-        {
-            ErrorData *edata = CopyErrorData();
-            llhttp_status_t status = HTTP_STATUS_INTERNAL_SERVER_ERROR;
-            if (edata->sqlerrcode == ERRCODE_NO_DATA_FOUND) {
-                status = HTTP_STATUS_NOT_FOUND;
-            }
-            char *resp =
-                psprintf("HTTP/1.0 %d %s\r\nContent-Length: %ld\r\n\r\n%s\r\n",
-                         status,
-                         llhttp_status_name(status),
-                         strlen(edata->message),
-                         edata->message);
-            FreeErrorData(edata);
-            send(client, resp, strlen(resp), 0);
-            pfree(resp);
-        }
-        PG_END_TRY(2);
+
+        // Instantiate the WASM module
+        pgstat_report_activity(STATE_RUNNING, "running WASM application");
+        exec_env = rst_module_instantiate(pmod, 256 * 1024, 1024 * 1024);
+
+        // Prepare context for execution
+        Context context = { .fd = client, .module = pmod };
+        wasm_runtime_set_user_data(exec_env, &context);
+        context.wait_set = CreateWaitEventSet(CurrentMemoryContext, 2);
+        AddWaitEventToSet(context.wait_set,
+                          WL_LATCH_SET,
+                          PGINVALID_SOCKET,
+                          MyLatch,
+                          NULL);
+        AddWaitEventToSet(context.wait_set,
+                          WL_SOCKET_CLOSED,
+                          client,
+                          NULL,
+                          NULL);
+
+        // Initialize context
+        rst_init_instance_context(exec_env);
+        rst_init_context_for_jsonb(exec_env);
+        wasm_module_inst_t instance = wasm_exec_env_get_module_inst(exec_env);
+        init_llhttp(&context, instance);
+        context.http_parser.data = exec_env;
+
+        // Run the WASM module instance
+        wasm_function_inst_t start_func =
+            wasm_runtime_lookup_function(instance, "_start");
+        if (!start_func)
+            ereport(ERROR, errmsg("cannot find WASM entrypoint"));
+        success = wasm_runtime_call_wasm(exec_env, start_func, 0, NULL);
     }
     PG_FINALLY();
     {
@@ -747,7 +728,10 @@ on_readable() {
         if (spi_connected) {
             SPI_finish();
             PopActiveSnapshot();
-            CommitTransactionCommand();
+            if (success && !_do_rethrow)
+                CommitTransactionCommand();
+            else
+                AbortCurrentTransaction();
             pgstat_report_stat(true);
             pgstat_report_activity(STATE_IDLE, NULL);
         }

@@ -255,7 +255,9 @@ create_module_with_queries(Datum name) {
         PG_END_TRY(2);
     }
     PG_FINALLY();
-    { SPI_freetuptable(tuptable); }
+    {
+        SPI_freetuptable(tuptable);
+    }
     PG_END_TRY();
 
     return pmod;
@@ -342,7 +344,9 @@ load_aot_module(const char *name, uint8 *bin_code, uint32_t bin_code_len) {
         PG_END_TRY(2);
     }
     PG_FINALLY();
-    { MemoryContextSwitchTo(tx_mctx); }
+    {
+        MemoryContextSwitchTo(tx_mctx);
+    }
     PG_END_TRY();
 
     return aot_module;

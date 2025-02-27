@@ -25,11 +25,12 @@
 
 #include "wasm_runtime_common.h"
 
-#define RST_WASM_TO_PG_ARGS wasm_exec_env_t exec_env, const wasm_value_t value
+#define RST_WASM_TO_PG_ARGS \
+    wasm_exec_env_t exec_env, Oid oid, const wasm_value_t value
 #define RST_WASM_TO_PG_RET Datum
-#define RST_PG_TO_WASM_ARGS                                          \
-    Datum value, wasm_struct_obj_t tuptable, uint32 row, uint32 col, \
-        wasm_exec_env_t exec_env, wasm_ref_type_t type
+#define RST_PG_TO_WASM_ARGS                                              \
+    Datum value, wasm_obj_t tuptable, Oid oid, wasm_exec_env_t exec_env, \
+        wasm_ref_type_t type
 #define RST_PG_TO_WASM_RET wasm_value_t
 
 typedef struct PreparedModule PreparedModule;
@@ -59,9 +60,17 @@ typedef struct Context {
     wasm_function_inst_t on_error;
 
     PreparedModule *module;
-    wasm_function_inst_t call_as_datum;
     wasm_struct_obj_t queries;
-    List *tuple_tables;
+    WASMRttTypeRef anyref_array;
+    wasm_function_inst_t json_parse_push_string;
+    wasm_function_inst_t json_parse_push_number;
+    wasm_function_inst_t json_parse_push_bool;
+    wasm_function_inst_t json_parse_push_null;
+    wasm_function_inst_t json_parse_object_start;
+    wasm_function_inst_t json_parse_object_field_start;
+    wasm_function_inst_t json_parse_object_end;
+    wasm_function_inst_t json_parse_array_start;
+    wasm_function_inst_t json_parse_array_end;
 } Context;
 
 typedef RST_WASM_TO_PG_RET (*WASM2PGFunc)(RST_WASM_TO_PG_ARGS);
@@ -71,7 +80,8 @@ typedef struct QueryPlan {
     SPIPlanPtr plan;
     uint32 nargs;
     uint32 nattrs;
-    wasm_ref_type_t tuptable_type;
+    Oid *argtypes;
+    Oid *rettypes;
     wasm_ref_type_t array_type;
     wasm_ref_type_t fixed_array_type;
     wasm_ref_type_t ret_type;
@@ -94,11 +104,5 @@ rst_free_instance_context(wasm_exec_env_t exec_env);
 
 int32_t
 env_execute_statement(wasm_exec_env_t exec_env, int32_t idx);
-
-WASMArrayObjectRef
-env_detoast(wasm_exec_env_t exec_env,
-            int32_t tuptable_idx,
-            int32_t row,
-            int32_t col);
 
 #endif /* RUSTICA_QUERY_H */
