@@ -173,17 +173,18 @@ ifeq ($(DEBUG),1)
 		-DWASM_ENABLE_LINUX_PERF=1 \
 		-DWASM_ENABLE_MEMORY_PROFILING=1 \
 		-DWASM_ENABLE_MEMORY_TRACING=1 \
-		-DWASM_ENABLE_DEBUG_AOT=1
+		-DBH_DEBUG=1
+#		-DWASM_ENABLE_DEBUG_AOT=1
 	OBJS += \
 		$(WAMR_IWASM_ROOT)/aot/aot_perf_map.o \
-		$(WAMR_IWASM_ROOT)/aot/debug/elf_parser.o \
-		$(WAMR_IWASM_ROOT)/aot/debug/jit_debug.o \
-		$(WAMR_IWASM_ROOT)/compilation/debug/dwarf_extractor.o
+		$(WAMR_IWASM_ROOT)/aot/debug/elf_parser.o
+#		$(WAMR_IWASM_ROOT)/aot/debug/jit_debug.o \
+#		$(WAMR_IWASM_ROOT)/compilation/debug/dwarf_extractor.o
 	ALL_INCLUDES += \
 		-I$(WAMR_IWASM_ROOT)/aot/debug \
 		-I$(WAMR_IWASM_ROOT)/compilation/debug
 	SHLIB_LINK += -llldb
-	PG_CFLAGS += -g -O0
+	PG_CFLAGS += -g -O0 -Wno-incompatible-pointer-types
 	PG_CXXFLAGS += -g -O0
 endif
 
@@ -302,7 +303,13 @@ $(DEV_PG_INSTALL): $(DEV_PG_SRC)
 	mkdir -p $(DEV_PG_INSTALL)
 	$(eval DEV_PG_INSTALL_PREFIX := $(shell realpath $(DEV_PG_INSTALL)))
 	cd $(DEV_PG_SRC) && \
-		$(CLEAN_ENV) ./configure --prefix $(DEV_PG_INSTALL_PREFIX) --with-uuid=e2fs --enable-debug && \
+		$(CLEAN_ENV) ./configure \
+			--prefix $(DEV_PG_INSTALL_PREFIX) \
+			--with-uuid=e2fs \
+			--enable-debug \
+			--enable-cassert \
+			--enable-depend \
+		&& \
 		$(CLEAN_ENV) $(MAKE) -j $(shell nproc) && \
 		$(CLEAN_ENV) $(MAKE) install && \
 		$(CLEAN_ENV) $(MAKE) -C contrib install

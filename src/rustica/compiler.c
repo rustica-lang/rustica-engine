@@ -60,7 +60,11 @@ typedef enum pg_to_wasm_fn {
 } pg_to_wasm_fn;
 
 static Datum
-compile_aot(wasm_module_t module);
+compile_aot(
+#if WASM_ENABLE_DEBUG_AOT != 0
+    bytea *wasm,
+#endif
+    wasm_module_t module);
 
 static void
 run_and_compile(wasm_module_t module,
@@ -110,7 +114,11 @@ static List *
 describe_query_results(char *sql, Oid *argtypes, int nargs);
 
 static Datum
-compile_aot(wasm_module_t module) {
+compile_aot(
+#if WASM_ENABLE_DEBUG_AOT != 0
+    bytea *wasm,
+#endif
+    wasm_module_t module) {
     AOTCompOption option = { .opt_level = 3,
                              .size_level = 3,
                              .output_format = AOT_FORMAT_FILE,
@@ -129,6 +137,7 @@ compile_aot(wasm_module_t module) {
                        aot_get_last_error()));
 #if WASM_ENABLE_DEBUG_AOT != 0
     File file = OpenTemporaryFile(false);
+    int32 wasm_size = VARSIZE_ANY_EXHDR(wasm);
     int nbytes = FileWrite(file, VARDATA_ANY(wasm), wasm_size, 0, 0);
     if (nbytes != wasm_size) {
         if (nbytes < 0)
@@ -240,7 +249,11 @@ rst_compile(PG_FUNCTION_ARGS) {
         Assert(query_oid != InvalidOid);
 
         // Compile AOT binary and query plans
-        rv[0] = compile_aot(module);
+        rv[0] = compile_aot(
+#if WASM_ENABLE_DEBUG_AOT != 0
+            wasm,
+#endif
+            module);
         run_and_compile(module, query_oid, &rv[1], &rv[2]);
     }
     PG_FINALLY();
@@ -366,8 +379,8 @@ compile_queries(CommonHeapTypes *heap_types,
             // Compile the actual query object
             wasm_value_t value;
             wasm_struct_obj_get_field(queries, q, false, &value);
+            Assert(wasm_obj_is_struct_obj(value.gc_obj));
             wasm_struct_obj_t query = (wasm_struct_obj_t)value.gc_obj;
-            Assert(wasm_obj_is_struct_obj(query));
             value.i64 = q;
             wasm_struct_obj_set_field(query, 0, &value);
             compile_query(heap_types,
@@ -569,8 +582,8 @@ compile_query(CommonHeapTypes *heap_types,
 
     // 2. sql: text = sql: Bytes
     wasm_struct_obj_get_field(query, 1, false, &value);
+    Assert(wasm_obj_is_array_obj(value.gc_obj));
     wasm_array_obj_t sql_bytes = (wasm_array_obj_t)value.gc_obj;
-    Assert(wasm_obj_is_array_obj(sql_bytes));
     char *sql = wasm_array_obj_first_elem_addr(sql_bytes);
     uint32 wasm_sql_len = wasm_array_obj_length(sql_bytes);
     size_t sql_len = wasm_sql_len;
@@ -597,8 +610,8 @@ compile_query(CommonHeapTypes *heap_types,
 
     // 4. arg_oids: oid[] = args_oids: Array[Int] { buf: array(i32), len: Int }
     wasm_struct_obj_get_field(query, 2, false, &value);
+    Assert(wasm_obj_is_struct_obj(value.gc_obj));
     wasm_struct_obj_t args_oids_array = (wasm_struct_obj_t)value.gc_obj;
-    Assert(wasm_obj_is_array_obj(args_oids_array));
     wasm_struct_obj_get_field(args_oids_array, 1, false, &value);
     if (value.i32 != nargs)
         ereport(ERROR, errmsg("given %d OIDs but expect %d", value.i32, nargs));

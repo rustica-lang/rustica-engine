@@ -217,7 +217,7 @@ create_module_with_queries(Datum name) {
                 errmsg("failed to load module queries: %s",
                        SPI_result_code_string(ret)));
     SPITupleTable *tuptable = SPI_tuptable;
-    Assert(tuptable->tupdesc->natts == 12);
+    Assert(tuptable->tupdesc->natts == 11);
     debug_query_string = NULL;
 
     // Construct the PreparedModule in TopMemoryContext and initialize name,

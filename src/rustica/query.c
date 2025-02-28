@@ -467,12 +467,13 @@ rst_init_instance_context(wasm_exec_env_t exec_env) {
             ereport(ERROR, errmsg("failed to call get_queries()"));
         Assert(val.kind == WASM_EXTERNREF);
         ctx->queries = (wasm_struct_obj_t)val.of.ref;
-        Assert(pmod->nqueries == wasm_struct_obj_get_field_count(ctx->queries));
+        Assert(ctx->module->nqueries
+               == wasm_struct_obj_get_field_count(ctx->queries));
         for (int i = 0; i < ctx->module->nqueries; i++) {
             wasm_value_t value;
             wasm_struct_obj_get_field(ctx->queries, i, false, &value);
+            Assert(wasm_obj_is_struct_obj(value.gc_obj));
             wasm_struct_obj_t query = (wasm_struct_obj_t)value.gc_obj;
-            Assert(wasm_obj_is_struct_obj(query));
             value.i64 = i;
             wasm_struct_obj_set_field(query, 0, &value);
         }

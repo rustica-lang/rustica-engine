@@ -47,7 +47,7 @@ rst_textget(wasm_exec_env_t exec_env, wasm_obj_t ref, int32_t index) {
     text *t = DatumGetTextPP(str);
     char *data = VARDATA_ANY(t);
     int size = VARSIZE_ANY_EXHDR(t);
-    pg_wchar rv;
+    pg_wchar rv[2];
 
     int offset = 0;
     if (pg_database_encoding_max_length() == 1) {
@@ -68,9 +68,9 @@ rst_textget(wasm_exec_env_t exec_env, wasm_obj_t ref, int32_t index) {
             goto error;
     }
 
-    pg_mb2wchar_with_len(data + offset, &rv, 1);
+    pg_mb2wchar_with_len(data + offset, rv, 1);
     RST_FREE_IF_COPY(t, str);
-    return (int32_t)rv;
+    return (int32_t)rv[0];
 
 error:
     RST_FREE_IF_COPY(t, str);
