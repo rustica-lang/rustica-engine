@@ -47,7 +47,6 @@ static pgsocket sock;
 static char hello[12];
 static WaitEventSet *wait_set = NULL;
 static bool shutdown_requested = false;
-static bool notify_received = false;
 static char state = WAIT_WRITE;
 static int sent = 0;
 static FDMessage fd_msg;
@@ -799,7 +798,6 @@ on_notification_received() {
         (errmsg(
             "rustica-%d: received notification for module cache invalidation",
             worker_id)));
-
     const PQcommMethods *old_methods = PqCommMethods;
     PqCommMethods = &mock_comm_methods;
     whereToSendOutput = DestRemote;
@@ -820,6 +818,7 @@ main_loop() {
         timeout = rst_worker_idle_timeout * 1000;
     for (;;) {
         nevents = WaitEventSetWait(wait_set, timeout, events, 2, 0);
+
         if (nevents == 0 && state == WAIT_READ) {
             ereport(DEBUG1, (errmsg("rustica-%d: idle timeout", worker_id)));
             return;
@@ -829,10 +828,6 @@ main_loop() {
                 if (shutdown_requested)
                     return;
                 ResetLatch(MyLatch);
-                if (notify_received) {
-                    notify_received = false;
-                    on_notification_received();
-                }
             }
             if (events[i].events & WL_SOCKET_CLOSED) {
                 ereport(DEBUG1,
@@ -843,6 +838,10 @@ main_loop() {
                 on_writeable();
             if (state == WAIT_READ && events[i].events & WL_SOCKET_READABLE)
                 on_readable();
+        }
+
+        if (notifyInterruptPending) {
+            on_notification_received();
         }
     }
 }
@@ -864,9 +863,6 @@ on_sigterm(SIGNAL_ARGS) {
 static void
 on_sigusr1(SIGNAL_ARGS) {
     procsignal_sigusr1_handler(postgres_signal_arg);
-    if (notifyInterruptPending) {
-        notify_received = true;
-    }
     SetLatch(MyLatch);
 }
 
