@@ -53,12 +53,13 @@ static FDMessage fd_msg;
 
 static int32_t
 env_recv(wasm_exec_env_t exec_env,
-         WASMArrayObjectRef buf,
+         wasm_obj_t refobj,
          int32_t start,
          int32_t len) {
     WaitEvent events[1];
     Context *ctx = wasm_runtime_get_user_data(exec_env);
-    char *view = wasm_array_obj_first_elem_addr(buf);
+    Datum bytes = wasm_externref_obj_get_datum(refobj, BYTEAOID);
+    char *view = VARDATA_ANY(DatumGetPointer(bytes));
     ModifyWaitEvent(ctx->wait_set,
                     1,
                     WL_SOCKET_READABLE | WL_SOCKET_CLOSED,
@@ -77,12 +78,13 @@ env_recv(wasm_exec_env_t exec_env,
 
 static int32_t
 env_send(wasm_exec_env_t exec_env,
-         WASMArrayObjectRef buf,
+         wasm_obj_t refobj,
          int32_t start,
          int32_t len) {
     WaitEvent events[1];
     Context *ctx = wasm_runtime_get_user_data(exec_env);
-    char *view = wasm_array_obj_first_elem_addr(buf);
+    Datum bytes = wasm_externref_obj_get_datum(refobj, BYTEAOID);
+    char *view = VARDATA_ANY(DatumGetPointer(bytes));
     ModifyWaitEvent(ctx->wait_set,
                     1,
                     WL_SOCKET_WRITEABLE | WL_SOCKET_CLOSED,
@@ -107,16 +109,10 @@ maybe_call_on_error(wasm_exec_env_t exec_env, llhttp_errno_t rv) {
     if (!ctx->on_error)
         return;
     const char *reason = llhttp_get_error_reason(&ctx->http_parser);
-    uint32_t size = strlen(reason);
-    WASMArrayObjectRef buf =
-        wasm_array_obj_new_with_typeidx(exec_env,
-                                        ctx->module->heap_types.bytes,
-                                        size,
-                                        NULL);
-    char *view = wasm_array_obj_first_elem_addr(buf);
-    memcpy(view, reason, size);
+    wasm_externref_obj_t bytes =
+        cstring_into_varatt_obj(exec_env, reason, strlen(reason), BYTEAOID);
     wasm_val_t args[1] = { { .kind = WASM_EXTERNREF,
-                             .of.foreign = (uintptr_t)buf } };
+                             .of.foreign = (uintptr_t)bytes } };
     wasm_val_t results[1];
     if (!wasm_runtime_call_wasm_a(exec_env,
                                   ctx->on_error,
@@ -130,11 +126,12 @@ maybe_call_on_error(wasm_exec_env_t exec_env, llhttp_errno_t rv) {
 
 static int32_t
 env_llhttp_execute(wasm_exec_env_t exec_env,
-                   WASMArrayObjectRef buf,
+                   wasm_obj_t buf,
                    int32_t start,
                    int32_t len) {
+    Datum bytes = wasm_externref_obj_get_datum(buf, BYTEAOID);
     Context *ctx = wasm_runtime_get_user_data(exec_env);
-    char *view = wasm_array_obj_first_elem_addr(buf);
+    char *view = VARDATA_ANY(DatumGetPointer(bytes));
     llhttp_errno_t rv;
     ctx->current_buf = buf;
     rv = llhttp_execute(&ctx->http_parser, view + start, len);
@@ -151,7 +148,7 @@ env_llhttp_resume(wasm_exec_env_t exec_env) {
 }
 
 static int32_t
-env_llhttp_finish(wasm_exec_env_t exec_env, WASMArrayObjectRef buf) {
+env_llhttp_finish(wasm_exec_env_t exec_env, wasm_obj_t buf) {
     Context *ctx = wasm_runtime_get_user_data(exec_env);
     llhttp_errno_t rv;
     ctx->current_buf = buf;
@@ -169,9 +166,10 @@ env_llhttp_reset(wasm_exec_env_t exec_env) {
 }
 
 static int32_t
-env_llhttp_get_error_pos(wasm_exec_env_t exec_env, WASMArrayObjectRef buf) {
+env_llhttp_get_error_pos(wasm_exec_env_t exec_env, wasm_obj_t buf) {
     Context *ctx = wasm_runtime_get_user_data(exec_env);
-    char *view = wasm_array_obj_first_elem_addr(buf);
+    Datum bytes = wasm_externref_obj_get_datum(buf, BYTEAOID);
+    char *view = VARDATA_ANY(DatumGetPointer(bytes));
     return (int32_t)(llhttp_get_error_pos(&ctx->http_parser) - view);
 }
 
@@ -194,17 +192,17 @@ env_llhttp_get_http_minor(wasm_exec_env_t exec_env) {
 }
 
 #ifdef RUSTICA_SQL_BACKDOOR
-wasm_array_obj_t
+wasm_externref_obj_t
 env_sql_backdoor(wasm_exec_env_t exec_env,
-                 WASMArrayObjectRef buf,
+                 wasm_obj_t refobj,
                  int32_t start,
                  int32_t len) {
-    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
     char *resp;
     int res;
     PG_TRY();
     {
-        char *view = (char *)wasm_array_obj_first_elem_addr(buf) + start;
+        Datum bytes = wasm_externref_obj_get_datum(refobj, BYTEAOID);
+        char *view = VARDATA_ANY(DatumGetPointer(bytes)) + start;
         if (view[len - 1] != '\0') {
             char *sql = (char *)palloc(len + 1);
             memcpy(sql, view, len);
@@ -220,11 +218,13 @@ env_sql_backdoor(wasm_exec_env_t exec_env,
         bool isnull = true;
         if (SPI_tuptable == NULL) {
             resp = "null";
-        } else {
+        }
+        else {
             TupleDesc tupdesc = SPI_tuptable->tupdesc;
             Datum datum;
             if (SPI_tuptable->numvals == 1 && tupdesc->natts == 1
-                && (tupdesc->attrs[0].atttypid == JSONBOID || tupdesc->attrs[0].atttypid == JSONOID)) {
+                && (tupdesc->attrs[0].atttypid == JSONBOID
+                    || tupdesc->attrs[0].atttypid == JSONOID)) {
                 datum = SPI_getbinval(SPI_tuptable->vals[0],
                                       SPI_tuptable->tupdesc,
                                       1,
@@ -258,15 +258,7 @@ env_sql_backdoor(wasm_exec_env_t exec_env,
     }
     PG_END_TRY();
 
-    uint32 resp_len = strlen(resp);
-    wasm_array_obj_t rv =
-        wasm_array_obj_new_with_typeidx(exec_env,
-                                        ctx->module->heap_types.bytes,
-                                        resp_len,
-                                        NULL);
-    char *dest = (char *)wasm_array_obj_first_elem_addr(rv);
-    memcpy(dest, resp, resp_len);
-    return rv;
+    return cstring_into_varatt_obj(exec_env, resp, strlen(resp), BYTEAOID);
 }
 #endif
 
@@ -304,10 +296,9 @@ llhttp_data_cb_impl(wasm_exec_env_t exec_env,
     WASMStructObjectRef view =
         wasm_struct_obj_new_with_typeidx(exec_env, ctx->bytes_view);
     wasm_value_t buf_ref, start, len;
-    buf_ref.gc_obj = (wasm_obj_t)ctx->current_buf;
-    start.i32 =
-        (int32_t)(at
-                  - (char *)wasm_array_obj_first_elem_addr(ctx->current_buf));
+    buf_ref.gc_obj = ctx->current_buf;
+    Datum bytes = wasm_externref_obj_get_datum(ctx->current_buf, BYTEAOID);
+    start.i32 = (int32_t)(at - VARDATA_ANY(DatumGetPointer(bytes)));
     len.i32 = (int32_t)length;
     wasm_struct_obj_set_field(view, 0, &buf_ref);
     wasm_struct_obj_set_field(view, 1, &start);

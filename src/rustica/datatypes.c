@@ -200,15 +200,3 @@ cstring_into_varatt_obj(wasm_exec_env_t exec_env,
     memcpy(VARDATA_ANY(obj->body.ptr), data, len);
     return rst_externref_of_obj(exec_env, obj);
 }
-
-wasm_array_obj_t
-wasm_obj_ensure_array_i8(wasm_obj_t obj) {
-    if (!wasm_obj_is_array_obj(obj))
-        ereport(ERROR, errmsg("wasm_obj_ensure_array_i8: not an array object"));
-    WASMType *type = ((WASMRttTypeRef)wasm_object_header(obj))->defined_type;
-    if (wasm_array_type_get_elem_type((wasm_array_type_t)type, NULL).value_type
-        != VALUE_TYPE_I8)
-        ereport(ERROR,
-                errmsg("wasm_obj_ensure_array_i8: not an array<i8> object"));
-    return (wasm_array_obj_t)obj;
-}

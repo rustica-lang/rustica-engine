@@ -294,8 +294,8 @@ rst_json_parse(wasm_exec_env_t exec_env,
                wasm_obj_t buf,
                int32_t start,
                int32_t length) {
-    wasm_array_obj_t buf_array = wasm_obj_ensure_array_i8(buf);
-    char *ptr = wasm_array_obj_first_elem_addr(buf_array);
+    Datum buf_datum = wasm_externref_obj_get_datum(buf, BYTEAOID);
+    char *ptr = VARDATA_ANY(DatumGetPointer(buf_datum));
     JsonLexContext *lex =
         makeJsonLexContextCstringLen(ptr + start, length, PG_UTF8, true);
     JsonSemAction sem = {

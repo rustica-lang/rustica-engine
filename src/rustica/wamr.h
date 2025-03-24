@@ -52,6 +52,9 @@ wasm_ref_type_get_referred_array(wasm_ref_type_t ref_type,
                                  wasm_module_t module,
                                  bool nullable);
 
+bool
+wasm_ref_type_is_ref_extern(wasm_ref_type_t ref_type);
+
 wasm_func_type_t
 wasm_module_lookup_exported_func(wasm_module_t module, const char *name);
 

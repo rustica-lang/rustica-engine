@@ -41,7 +41,7 @@ typedef struct Context {
 
     llhttp_t http_parser;
     llhttp_settings_t http_settings;
-    WASMArrayObjectRef current_buf;
+    wasm_obj_t current_buf;
     int32_t bytes_view;
     wasm_function_inst_t on_message_begin;
     wasm_function_inst_t on_method;

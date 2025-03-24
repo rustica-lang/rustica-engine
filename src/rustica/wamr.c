@@ -141,6 +141,12 @@ wasm_ref_type_get_referred_array(wasm_ref_type_t ref_type,
     return (wasm_array_type_t)type;
 }
 
+bool
+wasm_ref_type_is_ref_extern(wasm_ref_type_t ref_type) {
+    return ref_type.value_type == VALUE_TYPE_HT_NON_NULLABLE_REF
+           && ref_type.heap_type == HEAP_TYPE_EXTERN;
+}
+
 wasm_func_type_t
 wasm_module_lookup_exported_func(wasm_module_t module, const char *name) {
     int32 count = wasm_runtime_get_export_count(module);
@@ -198,15 +204,15 @@ wasm_ref_type_repr(CommonHeapTypes *heap_types, wasm_ref_type_t ref_type) {
         case VALUE_TYPE_HT_NON_NULLABLE_REF:
         {
             int32_t heap_type = ref_type.heap_type;
-            if (heap_type == heap_types->bytes)
-                return "ref $moonbit.bytes";
+            if (heap_type == HEAP_TYPE_EXTERN)
+                return "ref extern";
             return "ref <unknown>";
         }
         case VALUE_TYPE_HT_NULLABLE_REF:
         {
             int32_t heap_type = ref_type.heap_type;
-            if (heap_type == heap_types->bytes)
-                return "ref null $moonbit.bytes";
+            if (heap_type == HEAP_TYPE_EXTERN)
+                return "ref null extern";
             return "ref null <unknown>";
         }
 

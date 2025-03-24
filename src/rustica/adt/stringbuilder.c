@@ -96,13 +96,18 @@ sb_write_bytes(wasm_exec_env_t exec_env,
                int32_t start,
                int32_t len) {
     StringInfo sb = sb_ensure_string_info(refobj);
-    wasm_array_obj_t arr = wasm_obj_ensure_array_i8(bytes);
-    if (start < 0 || start + len > wasm_array_obj_length(arr))
+    bytea *b = DatumGetByteaP(wasm_externref_obj_get_datum(bytes, BYTEAOID));
+    if (start < 0 || start + len > VARSIZE_ANY_EXHDR(b))
         ereport(ERROR, errmsg("sb_write_bytes: index out of bound"));
-    appendBinaryStringInfoNT(sb,
-                             (char *)wasm_array_obj_first_elem_addr(arr)
-                                 + start,
-                             len);
+    appendBinaryStringInfoNT(sb, (char *)VARDATA_ANY(b) + start, len);
+    return 0;
+}
+
+static int32_t
+sb_write_byte(wasm_exec_env_t exec_env, wasm_obj_t refobj, int32_t byte) {
+    StringInfo sb = sb_ensure_string_info(refobj);
+    enlargeStringInfo(sb, 1);
+    sb->data[sb->len++] = (char)byte;
     return 0;
 }
 
@@ -112,17 +117,10 @@ sb_to_string(wasm_exec_env_t exec_env, wasm_obj_t refobj) {
     return cstring_into_varatt_obj(exec_env, sb->data, sb->len, TEXTOID);
 }
 
-static wasm_array_obj_t
+static wasm_externref_obj_t
 sb_to_bytes(wasm_exec_env_t exec_env, wasm_obj_t refobj) {
-    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
     StringInfo sb = sb_ensure_string_info(refobj);
-    wasm_array_obj_t rv =
-        wasm_array_obj_new_with_typeidx(exec_env,
-                                        ctx->module->heap_types.bytes,
-                                        sb->len,
-                                        NULL);
-    memcpy(wasm_array_obj_first_elem_addr(rv), sb->data, sb->len);
-    return rv;
+    return cstring_into_varatt_obj(exec_env, sb->data, sb->len, BYTEAOID);
 }
 
 static NativeSymbol sb_symbols[] = {
@@ -132,6 +130,7 @@ static NativeSymbol sb_symbols[] = {
     { "sb_write_substring", sb_write_substring, "(rrii)i" },
     { "sb_write_char", sb_write_char, "(ri)i" },
     { "sb_write_bytes", sb_write_bytes, "(rrii)i" },
+    { "sb_write_byte", sb_write_byte, "(ri)i" },
     { "sb_to_string", sb_to_string, "(r)r" },
     { "sb_to_bytes", sb_to_bytes, "(r)r" },
 };

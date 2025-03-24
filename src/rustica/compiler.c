@@ -34,6 +34,7 @@
 #endif
 
 #include "rustica/compiler.h"
+#include "rustica/datatypes.h"
 #include "rustica/utils.h"
 #include "rustica/wamr.h"
 
@@ -79,8 +80,7 @@ compile_queries(CommonHeapTypes *heap_types,
                 wasm_module_t module);
 
 static void
-compile_query_type(CommonHeapTypes *heap_types,
-                   wasm_module_t module,
+compile_query_type(wasm_module_t module,
                    wasm_ref_type_t ref_type,
                    Datum *query_attrs);
 
@@ -347,7 +347,8 @@ compile_queries(CommonHeapTypes *heap_types,
                                                   64 * 1024,
                                                   256 * 1024,
                                                   ERROR_BUF_PARAMS)))
-            ereport(ERROR, errmsg("cannot instantiate WASM module"));
+            ereport(ERROR,
+                    errmsg("cannot instantiate WASM module: %s", ERROR_BUF));
         if (!(exec_env = wasm_exec_env_create(instance, 64 * 1024)))
             ereport(ERROR, errmsg("cannot create execution environment"));
         wasm_function_inst_t get_queries_func =
@@ -374,7 +375,7 @@ compile_queries(CommonHeapTypes *heap_types,
             // Compile the query type first
             wasm_ref_type_t query_ref_type =
                 wasm_struct_type_get_field_type(queries_type, q, NULL);
-            compile_query_type(heap_types, module, query_ref_type, query_attrs);
+            compile_query_type(module, query_ref_type, query_attrs);
 
             // Compile the actual query object
             wasm_value_t value;
@@ -425,8 +426,7 @@ compile_queries(CommonHeapTypes *heap_types,
 }
 
 static void
-compile_query_type(CommonHeapTypes *heap_types,
-                   wasm_module_t module,
+compile_query_type(wasm_module_t module,
                    wasm_ref_type_t ref_type,
                    Datum *query_attrs) {
     // Each Query must be a struct of at least 5 fields
@@ -445,20 +445,7 @@ compile_query_type(CommonHeapTypes *heap_types,
 
     // second field: the SQL text in bytes
     ref_type = wasm_struct_type_get_field_type(query_type, 1, NULL);
-    if (heap_types->bytes == -1) {
-        wasm_array_type_t bytes_type =
-            wasm_ref_type_get_referred_array(ref_type, module, false);
-        if (!bytes_type)
-            ereport(
-                ERROR,
-                errmsg("second field of Query must be a non-nullable array"));
-        if (wasm_array_type_get_elem_type(bytes_type, NULL).value_type
-            != VALUE_TYPE_I8)
-            ereport(ERROR,
-                    errmsg("second field of Query must be an array of i8"));
-        heap_types->bytes = ref_type.heap_type;
-    }
-    else if (ref_type.heap_type != heap_types->bytes)
+    if (!wasm_ref_type_is_ref_extern(ref_type))
         ereport(ERROR, errmsg("second field of Query must be bytes"));
 
     // third field: MoonBit array of query argument OIDs
@@ -582,18 +569,17 @@ compile_query(CommonHeapTypes *heap_types,
 
     // 2. sql: text = sql: Bytes
     wasm_struct_obj_get_field(query, 1, false, &value);
-    Assert(wasm_obj_is_array_obj(value.gc_obj));
-    wasm_array_obj_t sql_bytes = (wasm_array_obj_t)value.gc_obj;
-    char *sql = wasm_array_obj_first_elem_addr(sql_bytes);
-    uint32 wasm_sql_len = wasm_array_obj_length(sql_bytes);
-    size_t sql_len = wasm_sql_len;
-    if (sql[wasm_sql_len - 1] != '\0')
-        sql_len++;
-    text *sql_datum = (text *)palloc(sql_len + VARHDRSZ);
-    SET_VARSIZE(sql_datum, sql_len + VARHDRSZ);
-    memcpy(VARDATA(sql_datum), sql, wasm_sql_len);
-    sql = VARDATA(sql_datum);
-    sql[sql_len - 1] = '\0';
+    text *sql_datum = (text *)DatumGetPointer(
+        wasm_externref_obj_get_datum(value.gc_obj, BYTEAOID));
+    char *sql = VARDATA_ANY(sql_datum);
+    int sql_len = VARSIZE_ANY_EXHDR(sql_datum);
+    if (sql[sql_len - 1] != '\0') {
+        sql_datum = (text *)palloc(sql_len + 1 + VARHDRSZ);
+        SET_VARSIZE(sql_datum, sql_len + 1 + VARHDRSZ);
+        memcpy(VARDATA(sql_datum), sql, sql_len);
+        sql = VARDATA(sql_datum);
+        sql[sql_len] = '\0';
+    }
     query_attrs[2] = PointerGetDatum(sql_datum);
 
     // Re-read the compiled array arg_field_types

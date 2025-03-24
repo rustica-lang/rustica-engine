@@ -105,9 +105,6 @@ cstring_into_varatt_obj(wasm_exec_env_t exec_env,
                         size_t llen,
                         Oid oid);
 
-wasm_array_obj_t
-wasm_obj_ensure_array_i8(wasm_obj_t obj);
-
 void
 rst_register_natives_bytea();
 
