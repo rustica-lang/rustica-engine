@@ -2,7 +2,7 @@
 pkgname=rustica-wamr
 pkgver=1.0
 pkgrel=1
-pkgdesc="Rustica - Rich-Relational DX-first Database"
+pkgdesc="Rustica Engine - Postgres as an API Server!"
 arch=('x86_64')
 url="https://yanji.tech/"
 license=('MulanPSL-v2')

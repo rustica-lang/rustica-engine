@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2024-present 燕几（北京）科技有限公司
  *
- * Rustica (runtime) is licensed under Mulan PSL v2. You can use this
+ * Rustica Engine is licensed under Mulan PSL v2. You can use this
  * software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
  *
@@ -349,7 +349,7 @@ on_frontend(Socket *socket, uint32 events) {
             BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
         worker.bgw_start_time = BgWorkerStart_ConsistentState;
         worker.bgw_restart_time = BGW_NEVER_RESTART;
-        snprintf(worker.bgw_library_name, BGW_MAXLEN, "rustica-wamr");
+        snprintf(worker.bgw_library_name, BGW_MAXLEN, "rustica-engine");
         snprintf(worker.bgw_function_name, BGW_MAXLEN, "rustica_worker");
         worker.bgw_notify_pid = MyProcPid;
         worker.bgw_main_arg = Int32GetDatum(worker_id_seq++);

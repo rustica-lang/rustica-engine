@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2024-present 燕几（北京）科技有限公司
  *
- * Rustica (runtime) is licensed under Mulan PSL v2. You can use this
+ * Rustica Engine is licensed under Mulan PSL v2. You can use this
  * software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
  *
@@ -41,7 +41,7 @@ _PG_init() {
                                 .bgw_notify_pid = 0 };
     snprintf(master.bgw_name, BGW_MAXLEN, "rustica master");
     snprintf(master.bgw_type, BGW_MAXLEN, "rustica master");
-    snprintf(master.bgw_library_name, BGW_MAXLEN, "rustica-wamr");
+    snprintf(master.bgw_library_name, BGW_MAXLEN, "rustica-engine");
     snprintf(master.bgw_function_name, BGW_MAXLEN, "rustica_master");
     RegisterBackgroundWorker(&master);
 }

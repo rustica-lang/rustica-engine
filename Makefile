@@ -6,7 +6,7 @@ BUNDLE_LLVM = 0
 VENDOR_DIR = vendor
 WAMR_VERSION = 2.1.2
 LLHTTP_VERSION = 9.2.1
-MODULE_big = rustica-wamr
+MODULE_big = rustica-engine
 SQL_BACKDOOR = 0
 
 # Vendor paths
@@ -230,8 +230,8 @@ PG_CXXFLAGS += -fno-rtti
 SHLIB_LINK += -lstdc++ \
 	$(WAMR_IWASM_ROOT)/common/arch/invokeNative_em64_simd.o
 
-EXTENSION = rustica-wamr
-DATA = sql/rustica-wamr--1.0.sql
+EXTENSION = rustica-engine
+DATA = sql/rustica-engine--1.0.sql
 
 ifeq ($(DEV),1)
 include $(DEV_PG_INSTALL)/.stub
@@ -319,7 +319,7 @@ $(DEV_PG_INSTALL)/.stub: $(DEV_PG_INSTALL)
 
 $(DEV_PG_DATA):
 	$(DEV_PG_INSTALL)/bin/initdb -D $(DEV_PG_DATA)
-	echo "shared_preload_libraries = 'rustica-wamr.so'" >> $(DEV_PG_DATA)/postgresql.conf
+	echo "shared_preload_libraries = 'rustica-engine.so'" >> $(DEV_PG_DATA)/postgresql.conf
 	echo "rustica.database = 'postgres'" >> $(DEV_PG_DATA)/postgresql.conf
 
 %.bc:

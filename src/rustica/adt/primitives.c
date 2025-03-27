@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2025-present 燕几（北京）科技有限公司
  *
- * Rustica (runtime) is licensed under Mulan PSL v2. You can use this
+ * Rustica Engine is licensed under Mulan PSL v2. You can use this
  * software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
  *
