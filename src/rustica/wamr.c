@@ -22,6 +22,7 @@
 #include "aot_runtime.h"
 
 #include "rustica/datatypes.h"
+#include "rustica/query.h"
 #include "rustica/wamr.h"
 
 static void
@@ -97,6 +98,7 @@ rst_init_wamr() {
     if (!wasm_runtime_full_init(&init_args))
         ereport(FATAL, (errmsg("cannot register WASM natives")));
     REGISTER_WASM_NATIVES("env", rst_noop_native_env);
+    rst_register_natives_query();
     rst_register_natives_bytea();
     rst_register_natives_date();
     rst_register_natives_jsonb();

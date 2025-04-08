@@ -493,16 +493,15 @@ compile_query_type(wasm_module_t module,
                                                         true,
                                                         'i'));
 
-    // fifth field: optional Array of struct or MoonBit Unit for result
+    // fifth field: boxed optional struct or MoonBit Unit for result
     ref_type = wasm_struct_type_get_field_type(query_type, 4, NULL);
-    Datum ret_type[3]; // all ref types of an Array[T] (+FixedArray[T], +T)
-    ret_type[0] = Int64GetDatum(*(int64 *)&ref_type);
-    if (!validate_moonbit_array(ref_type,
-                                module,
-                                &ref_type,
-                                (wasm_ref_type_t *)&ret_type[1],
-                                true))
-        ereport(ERROR, errmsg("fifth field of Query must be a MoonBit array"));
+    wasm_struct_type_t ref_box =
+        wasm_ref_type_get_referred_struct(ref_type, module, false);
+    if (!ref_box)
+        ereport(ERROR, errmsg("fifth field of Query must be a result box"));
+    if (wasm_struct_type_get_field_count(ref_box) != 1)
+        ereport(ERROR, errmsg("the result box must have exactly 1 field"));
+    ref_type = wasm_struct_type_get_field_type(ref_box, 0, NULL);
     uint32 nattrs;
     wasm_struct_type_t ret_struct_type;
     if (ref_type.value_type == VALUE_TYPE_I32) {
@@ -515,12 +514,12 @@ compile_query_type(wasm_module_t module,
     }
     else
         ereport(ERROR,
-                errmsg("fifth field of Query must be a MoonBit Array of "
-                       "nullable struct or Unit"));
-    ret_type[2] = Int64GetDatum(*(int64 *)&ref_type);
+                errmsg("fifth field of Query must be a box of nullable struct "
+                       "or Unit"));
+    Datum ret_type[1] = { Int64GetDatum(*(int64 *)&ref_type) };
 
     // Build ret_type array
-    dims[0] = 3;
+    dims[0] = 1;
     query_attrs[7] = PointerGetDatum(construct_md_array(ret_type,
                                                         NULL,
                                                         1,

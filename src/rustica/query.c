@@ -135,7 +135,7 @@ pg_float8_to_wasm_f64(RST_PG_TO_WASM_ARGS) {
 static RST_PG_TO_WASM_RET
 pg_datum_to_wasm_obj(RST_PG_TO_WASM_ARGS) {
     wasm_value_t wasm_value;
-    obj_t obj = rst_obj_new(exec_env, OBJ_DATUM, tuptable, 0);
+    obj_t obj = rst_obj_new(exec_env, OBJ_DATUM, tuple_obj, 0);
     obj->body.datum = value;
     obj->oid = oid;
     wasm_value.gc_obj = (wasm_obj_t)rst_externref_of_obj(exec_env, obj);
@@ -372,11 +372,9 @@ rst_init_query_plan(QueryPlan *plan, HeapTuple query_tup, TupleDesc tupdesc) {
                               (Datum **)&ref_type_ptr,
                               NULL,
                               &len);
-            if (len != 3)
+            if (len != 1)
                 ereport(ERROR, errmsg("wrong number of ret_type elements"));
-            plan->array_type = ref_type_ptr[0];
-            plan->fixed_array_type = ref_type_ptr[1];
-            plan->ret_type = ref_type_ptr[2];
+            plan->ret_type = ref_type_ptr[0];
             pfree(ref_type_ptr);
 
             // Take result OIDs
@@ -486,7 +484,7 @@ rst_free_instance_context(wasm_exec_env_t exec_env) {
     pfree(ctx->anyref_array->defined_type);
 }
 
-int32_t
+static int32_t
 env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     ereport(DEBUG1, (errmsg("execute sql: #%d", idx)));
 
@@ -511,62 +509,164 @@ env_execute_statement(wasm_exec_env_t exec_env, int32_t idx) {
     }
     SPI_execute_plan(plan->plan, values, NULL, false, 0);
 
-    if (plan->nattrs) {
-        obj_t obj = rst_obj_new(exec_env, OBJ_TUPLE_TABLE, NULL, 0);
-        obj->flags |= OBJ_OWNS_BODY;
-        obj->body.tuptable = SPI_tuptable;
-        wasm_obj_t tuptable = rst_anyref_of_obj(exec_env, obj);
-        wasm_local_obj_ref_t local_ref;
-        wasm_runtime_push_local_obj_ref(exec_env, &local_ref);
-        local_ref.val = tuptable;
+    return 1;
+}
 
-        // $@moonbitlang/core/builtin.Array<T> - struct
-        wasm_struct_obj_t rows_struct =
-            wasm_struct_obj_new_with_typeidx(exec_env,
-                                             plan->array_type.heap_type);
-        wasm_value_t rows_struct_value = { .gc_obj = (wasm_obj_t)rows_struct };
-        wasm_struct_obj_set_field(query, 4, &rows_struct_value);
+static wasm_externref_obj_t
+env_cursor_open(wasm_exec_env_t exec_env, int32_t idx) {
+    ereport(DEBUG1, (errmsg("cursor_open: #%d", idx)));
 
-        // $FixedArray<UnsafeMaybeUninit<T>>
-        wasm_array_obj_t rows_arr =
-            wasm_array_obj_new_with_typeidx(exec_env,
-                                            plan->fixed_array_type.heap_type,
-                                            SPI_tuptable->numvals,
-                                            NULL);
-        wasm_value_t rows_value = { .gc_obj = (wasm_obj_t)rows_arr };
-        wasm_struct_obj_set_field(rows_struct, 0, &rows_value);
-        wasm_value_t rows_num_value = { .i32 = (int32)SPI_tuptable->numvals };
-        wasm_struct_obj_set_field(rows_struct, 1, &rows_num_value);
+    // Take out the QueryPlan
+    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
+    if (idx < 0 || idx >= ctx->module->nqueries)
+        ereport(ERROR, errmsg("no such query: #%d", idx));
+    QueryPlan *plan = ctx->module->queries + idx;
+    if (!SPI_is_cursor_plan(plan->plan))
+        ereport(ERROR, errmsg("not a cursor plan"));
 
-        // Fill each element in the array
-        bool isnull;
-        TupleDesc tupdesc = SPI_tuptable->tupdesc;
-        for (uint32 i = 0; i < SPI_tuptable->numvals; i++) {
-            HeapTuple tuple = SPI_tuptable->vals[i];
+    // Read out user's query arguments
+    wasm_value_t val;
+    wasm_struct_obj_get_field(ctx->queries, idx, false, &val);
+    wasm_struct_obj_t query = (wasm_struct_obj_t)val.gc_obj;
+    wasm_struct_obj_get_field(query, 3, false, &val);
+    wasm_struct_obj_t args = (wasm_struct_obj_t)val.gc_obj;
 
-            // T
-            wasm_struct_obj_t row =
-                wasm_struct_obj_new_with_typeidx(exec_env,
-                                                 plan->ret_type.heap_type);
-            wasm_value_t row_value = { .gc_obj = (wasm_obj_t)row };
-            wasm_array_obj_set_elem(rows_arr, i, &row_value);
+    // Execute the query
+    Datum values[plan->nargs];
+    for (uint32 i = 0; i < plan->nargs; i++) {
+        wasm_struct_obj_get_field(args, i, false, &val);
+        values[i] = plan->wasm_to_pg_funcs[i](exec_env, plan->argtypes[i], val);
+    }
+    Portal portal = SPI_cursor_open(NULL, plan->plan, values, NULL, false);
+    obj_t rv = rst_obj_new(exec_env, OBJ_PORTAL, NULL, 0);
+    rv->flags |= OBJ_OWNS_BODY;
+    rv->body.portal = portal;
+    rv->query_idx = idx;
+    return rst_externref_of_obj(exec_env, rv);
+}
 
-            for (uint32 j = 0; j < plan->nattrs; j++) {
-                Datum binval =
-                    SPI_getbinval(tuple, tupdesc, (int)j + 1, &isnull);
-                wasm_value_t col_value =
-                    plan->pg_to_wasm_funcs[j](binval,
-                                              tuptable,
-                                              plan->rettypes[j],
-                                              exec_env,
-                                              plan->ret_field_types[j]);
-                wasm_struct_obj_set_field(row, j, &col_value);
-            }
-        }
+static wasm_externref_obj_t
+env_cursor_fetch(wasm_exec_env_t exec_env, wasm_obj_t cursor_ref, long count) {
+    obj_t obj = wasm_externref_obj_get_obj(cursor_ref, OBJ_PORTAL);
+    Portal portal = obj->body.portal;
+    if (!PortalIsValid(portal))
+        ereport(ERROR, errmsg("portal already closed"));
 
-        // all values are copied, so we can free the tuptable early
-        wasm_runtime_remove_local_obj_ref(exec_env, &local_ref);
+    SPI_cursor_fetch(portal, true, count);
+    obj_t rv = rst_obj_new(exec_env, OBJ_TUPLE_TABLE, NULL, 0);
+    rv->query_idx = obj->query_idx;
+    if (SPI_processed == 0) {
+        rv->body.tuptable = NULL;
+    }
+    else if (SPI_processed > INT_MAX) {
+        ereport(ERROR, errmsg("too many rows"));
+    }
+    else {
+        rv->flags |= OBJ_OWNS_BODY;
+        rv->body.tuptable = SPI_tuptable;
+    }
+    return rst_externref_of_obj(exec_env, rv);
+}
+
+static wasm_externref_obj_t
+env_cursor_fetch_all(wasm_exec_env_t exec_env, wasm_obj_t cursor_ref) {
+    return env_cursor_fetch(exec_env, cursor_ref, FETCH_ALL);
+}
+
+static int32_t
+env_cursor_close(wasm_exec_env_t exec_env, wasm_obj_t cursor_ref) {
+    obj_t obj = wasm_externref_obj_get_obj(cursor_ref, OBJ_PORTAL);
+    Portal portal = obj->body.portal;
+    if (PortalIsValid(portal)) {
+        SPI_cursor_close(portal);
+        obj->body.portal = NULL;
+    }
+    return 1;
+}
+
+static int32_t
+env_tuple_table_len(wasm_exec_env_t exec_env, wasm_obj_t tuptable_ref) {
+    obj_t obj = wasm_externref_obj_get_obj(tuptable_ref, OBJ_TUPLE_TABLE);
+    if (!obj->body.tuptable)
+        return 0;
+    return (int32_t)obj->body.tuptable->numvals;
+}
+
+static wasm_externref_obj_t
+env_tuple_table_get(wasm_exec_env_t exec_env,
+                    wasm_obj_t tuptable_ref,
+                    int32_t idx) {
+    obj_t obj = wasm_externref_obj_get_obj(tuptable_ref, OBJ_TUPLE_TABLE);
+    if (!obj->body.tuptable)
+        ereport(ERROR, errmsg("index out of range"));
+    if (idx < 0)
+        idx += (int32_t)obj->body.tuptable->numvals;
+    if (idx < 0 || idx >= obj->body.tuptable->numvals)
+        ereport(ERROR, errmsg("index out of range"));
+
+    HeapTuple tuple = obj->body.tuptable->vals[idx];
+    obj_t rv = rst_obj_new(exec_env, OBJ_HEAP_TUPLE, tuptable_ref, 0);
+    rv->flags |= OBJ_OWNS_BODY;
+    rv->body.tuple = tuple;
+    return rst_externref_of_obj(exec_env, rv);
+}
+
+static int32_t
+env_tuple_lower(wasm_exec_env_t exec_env, wasm_obj_t tuple_ref) {
+    obj_t obj = wasm_externref_obj_get_obj(tuple_ref, OBJ_HEAP_TUPLE);
+    obj_t tuptable_obj =
+        wasm_externref_obj_get_obj(obj->ref[0].val, OBJ_TUPLE_TABLE);
+    Context *ctx = (Context *)wasm_runtime_get_user_data(exec_env);
+    QueryPlan *plan = ctx->module->queries + tuptable_obj->query_idx;
+    if (plan->nattrs == 0)
+        ereport(ERROR, errmsg("no attributes in the tuple"));
+
+    // Get the box object
+    wasm_value_t val;
+    wasm_struct_obj_get_field(ctx->queries,
+                              tuptable_obj->query_idx,
+                              false,
+                              &val);
+    wasm_struct_obj_t query = (wasm_struct_obj_t)val.gc_obj;
+    wasm_struct_obj_get_field(query, 4, false, &val);
+    wasm_struct_obj_t box = (wasm_struct_obj_t)val.gc_obj;
+
+    // Create the actual result value
+    wasm_struct_obj_t ret =
+        wasm_struct_obj_new_with_typeidx(exec_env, plan->ret_type.heap_type);
+    wasm_value_t row_value = { .gc_obj = (wasm_obj_t)ret };
+    wasm_struct_obj_set_field(box, 0, &row_value);
+
+    // Fill the result value fields
+    bool isnull;
+    TupleDesc tupdesc = tuptable_obj->body.tuptable->tupdesc;
+    HeapTuple tuple = obj->body.tuple;
+    for (uint32 i = 0; i < plan->nattrs; i++) {
+        Datum binval = SPI_getbinval(tuple, tupdesc, (int)i + 1, &isnull);
+        wasm_value_t col_value =
+            plan->pg_to_wasm_funcs[i](binval,
+                                      tuple_ref,
+                                      plan->rettypes[i],
+                                      exec_env,
+                                      plan->ret_field_types[i]);
+        wasm_struct_obj_set_field(ret, i, &col_value);
     }
 
     return 1;
+}
+
+static NativeSymbol query_symbols[] = {
+    { "execute_statement", env_execute_statement, "(i)i" },
+    { "cursor_open", env_cursor_open, "(i)r" },
+    { "cursor_fetch", env_cursor_fetch, "(ri)r" },
+    { "cursor_fetch_all", env_cursor_fetch_all, "(r)r" },
+    { "cursor_close", env_cursor_close, "(r)i" },
+    { "tuple_table_len", env_tuple_table_len, "(r)i" },
+    { "tuple_table_get", env_tuple_table_get, "(ri)r" },
+    { "tuple_lower", env_tuple_lower, "(r)i" },
+};
+
+void
+rst_register_natives_query() {
+    REGISTER_WASM_NATIVES("env", query_symbols);
 }

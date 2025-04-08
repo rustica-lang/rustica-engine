@@ -40,7 +40,9 @@
 #define OBJ_DATUM 0
 #define OBJ_STRING_INFO 1
 #define OBJ_JSONB_VALUE 2
-#define OBJ_TUPLE_TABLE 3
+#define OBJ_PORTAL 3
+#define OBJ_TUPLE_TABLE 4
+#define OBJ_HEAP_TUPLE 5
 
 #define OBJ_REFERENCING (1 << 0)
 #define OBJ_OWNS_BODY (1 << 1)
@@ -55,7 +57,8 @@ typedef struct Obj {
 
     // optional 32-bit member
     union {
-        Oid oid; // only for OBJ_DATUM
+        Oid oid;           // only for OBJ_DATUM
+        int32_t query_idx; // OBJ_PORTAL, OBJ_TUPLE_TABLE
     };
 
     // pointer-sized body
@@ -63,7 +66,9 @@ typedef struct Obj {
         Datum datum;             // only for OBJ_DATUM
         StringInfo sb;           // only for OBJ_STRING_INFO
         JsonbValue *jbv;         // only for OBJ_JSONB_VALUE
+        Portal portal;           // only for OBJ_PORTAL
         SPITupleTable *tuptable; // only for OBJ_TUPLE_TABLE
+        HeapTuple tuple;         // only for OBJ_HEAP_TUPLE
 
         void *ptr; // convenient compatible pointer for all types
     } body;

@@ -28,8 +28,8 @@
 #define RST_WASM_TO_PG_ARGS \
     wasm_exec_env_t exec_env, Oid oid, const wasm_value_t value
 #define RST_WASM_TO_PG_RET Datum
-#define RST_PG_TO_WASM_ARGS                                              \
-    Datum value, wasm_obj_t tuptable, Oid oid, wasm_exec_env_t exec_env, \
+#define RST_PG_TO_WASM_ARGS                                               \
+    Datum value, wasm_obj_t tuple_obj, Oid oid, wasm_exec_env_t exec_env, \
         wasm_ref_type_t type
 #define RST_PG_TO_WASM_RET wasm_value_t
 
@@ -82,8 +82,6 @@ typedef struct QueryPlan {
     uint32 nattrs;
     Oid *argtypes;
     Oid *rettypes;
-    wasm_ref_type_t array_type;
-    wasm_ref_type_t fixed_array_type;
     wasm_ref_type_t ret_type;
     wasm_ref_type_t *ret_field_types;
     WASM2PGFunc *wasm_to_pg_funcs;
@@ -102,7 +100,7 @@ rst_init_instance_context(wasm_exec_env_t exec_env);
 void
 rst_free_instance_context(wasm_exec_env_t exec_env);
 
-int32_t
-env_execute_statement(wasm_exec_env_t exec_env, int32_t idx);
+void
+rst_register_natives_query();
 
 #endif /* RUSTICA_QUERY_H */

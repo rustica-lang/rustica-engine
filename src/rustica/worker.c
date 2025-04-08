@@ -273,7 +273,6 @@ static NativeSymbol native_env[] = {
     { "llhttp_get_method", env_llhttp_get_method, "()i" },
     { "llhttp_get_http_major", env_llhttp_get_http_major, "()i" },
     { "llhttp_get_http_minor", env_llhttp_get_http_minor, "()i" },
-    { "execute_statement", env_execute_statement, "(i)i" },
     { "ereport", env_ereport, "(ir)i" },
 #ifdef RUSTICA_SQL_BACKDOOR
     { "tid_to_oid", env_tid_to_oid, "(r)i" },
@@ -525,12 +524,7 @@ startup() {
         CommitTransactionCommand();
     }
     wasm_runtime_unregister_natives("env", rst_noop_native_env);
-    if (!wasm_runtime_register_natives("env",
-                                       native_env,
-                                       sizeof(native_env)
-                                           / sizeof(native_env[0])))
-        ereport(FATAL,
-                (errmsg("rustica-%d: could not register natives", worker_id)));
+    REGISTER_WASM_NATIVES("env", native_env);
     wasm_runtime_set_module_reader(wasm_module_reader_callback,
                                    wasm_module_completer_callback,
                                    wasm_module_destroyer_callback);

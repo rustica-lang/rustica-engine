@@ -57,8 +57,16 @@ obj_finalizer(wasm_obj_t wasm_obj, void *ptr) {
                 pfree(obj->body.jbv);
             break;
 
+        case OBJ_PORTAL:
+            if (PortalIsValid(obj->body.portal))
+                SPI_cursor_close(obj->body.portal);
+            break;
+
         case OBJ_TUPLE_TABLE:
             SPI_freetuptable(obj->body.tuptable);
+            break;
+
+        case OBJ_HEAP_TUPLE:
             break;
 
         default:
