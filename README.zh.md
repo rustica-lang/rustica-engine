@@ -1,7 +1,7 @@
 # <img src="docs/logo.svg" height="48px" align="right">  燕几图引擎——变 PG 为 API 服务器！
 
 [![English](https://img.shields.io/badge/英文-English-informational?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABsAAAAQCAYAAADnEwSWAAAABGdBTUEAALGPC/xhBQAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAG6ADAAQAAAABAAAAEAAAAACiF0fSAAABJUlEQVQ4EWP8//8/MwMDAysQEw0YGRl/EK0YWSHQsgogJgX8RNZPCpuJFMWUqqWrZSw4XBsCFL+FQ+4/DnEUYWC8gNKCEDB+X8MlgIKVWCJMD64ADwOorwmIHyNhdyDbFYgPAfFXIAaBV0CcCTIG5DNsLo0GKnDEYc8+oGsvQ+UEgLQMkrpYIDsSiJGjRxTInwY07wmuYCxDMgCdmQUUgFmGLheNLoDEzwG5gBFJgFQmNr3ZQEPsgfgImmEquHy2BajwHZpiGPcmjAGk0aPgCDCIp4HkgcHWA6RsQGwoEMEVZ9VATZdgqkig7yKp/YjEBjORIxJdjhw+3tIFVzCGAoPBEo9ta4E+f4NHHqsULstqsKpGCJ4BMkm2jNrBiHAOFhZdLQMA8pKhkQYZiokAAAAASUVORK5CYII=)](README.md)
-[![许可](https://img.shields.io/badge/许可-木兰PSLv2-success?logo=opensourceinitiative&logoColor=white)](http://license.coscl.org.cn/MulanPSL2/)
+[![许可](https://img.shields.io/badge/许可-木兰PSLv2-success?logo=opensourceinitiative&logoColor=white)](https://license.coscl.org.cn/MulanPSL2)
 
 
 燕几图引擎是一个 PostgreSQL 的扩展程序，使用 WebAssembly
