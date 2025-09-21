@@ -1,0 +1,301 @@
+diff --git a/contrib/dblink/meson.build b/contrib/dblink/meson.build
+index 45eeb58c618..10cbafa6ce0 100644
+--- a/contrib/dblink/meson.build
++++ b/contrib/dblink/meson.build
+@@ -34,6 +34,6 @@ tests += {
+     'sql': [
+       'dblink',
+     ],
+-    'regress_args': ['--dlpath', meson.build_root() / 'src/test/regress'],
++    'regress_args': ['--dlpath', meson.project_build_root() / 'src/test/regress'],
+   },
+ }
+diff --git a/contrib/postgres_fdw/meson.build b/contrib/postgres_fdw/meson.build
+index f0803ee077e..32f38d2b142 100644
+--- a/contrib/postgres_fdw/meson.build
++++ b/contrib/postgres_fdw/meson.build
+@@ -38,6 +38,6 @@ tests += {
+       'postgres_fdw',
+       'query_cancel',
+     ],
+-    'regress_args': ['--dlpath', meson.build_root() / 'src/test/regress'],
++    'regress_args': ['--dlpath', meson.project_build_root() / 'src/test/regress'],
+   },
+ }
+diff --git a/meson.build b/meson.build
+index 5c33f569b43..3e4b7e8df34 100644
+--- a/meson.build
++++ b/meson.build
+@@ -14,7 +14,7 @@ project('postgresql',
+   # We want < 0.56 for python 3.5 compatibility on old platforms. EPEL for
+   # RHEL 7 has 0.55. < 0.54 would require replacing some uses of the fs
+   # module, < 0.53 all uses of fs. So far there's no need to go to >=0.56.
+-  meson_version: '>=0.54',
++  meson_version: '>=0.56',
+   default_options: [
+     'warning_level=1', #-Wall equivalent
+     'b_pch=false',
+@@ -362,8 +362,8 @@ if flex.found()
+ endif
+ flex_wrapper = files('src/tools/pgflex')
+ flex_cmd = [python, flex_wrapper,
+-  '--builddir', '@BUILD_ROOT@',
+-  '--srcdir', '@SOURCE_ROOT@',
++  '--builddir', meson.project_build_root(),
++  '--srcdir', meson.project_source_root(),
+   '--privatedir', '@PRIVATE_DIR@',
+   '--flex', flex, '--perl', perl,
+   '-i', '@INPUT@', '-o', '@OUTPUT0@',
+@@ -2975,7 +2975,7 @@ catalog_pm = files('src/backend/catalog/Catalog.pm')
+ perfect_hash_pm = files('src/tools/PerfectHash.pm')
+ gen_kwlist_deps = [perfect_hash_pm]
+ gen_kwlist_cmd = [
+-  perl, '-I', '@SOURCE_ROOT@/src/tools',
++  perl, '-I', '@0@/src/tools'.format(meson.project_source_root()),
+   files('src/tools/gen_keywordlist.pl'),
+   '--output', '@OUTDIR@', '@INPUT@']
+ 
+@@ -2986,13 +2986,13 @@ gen_kwlist_cmd = [
+ ###
+ 
+ if host_system == 'windows'
+-  pg_ico = meson.source_root() / 'src' / 'port' / 'win32.ico'
++  pg_ico = meson.project_source_root() / 'src' / 'port' / 'win32.ico'
+   win32ver_rc = files('src/port/win32ver.rc')
+   rcgen = find_program('src/tools/rcgen', native: true)
+ 
+   rcgen_base_args = [
+     '--srcdir', '@SOURCE_DIR@',
+-    '--builddir', meson.build_root(),
++    '--builddir', meson.project_build_root(),
+     '--rcout', '@OUTPUT0@',
+     '--out', '@OUTPUT1@',
+     '--input', '@INPUT@',
+@@ -3231,7 +3231,7 @@ foreach t1 : configure_files
+   potentially_conflicting_files += meson.current_build_dir() / t
+ endforeach
+ foreach sub, fnames : generated_sources_ac
+-  sub = meson.build_root() / sub
++  sub = meson.project_build_root() / sub
+   foreach fname : fnames
+     potentially_conflicting_files += sub / fname
+   endforeach
+@@ -3331,7 +3331,7 @@ run_target('install-test-files',
+ ###############################################################
+ 
+ # DESTDIR for the installation we'll run tests in
+-test_install_destdir = meson.build_root() / 'tmp_install/'
++test_install_destdir = meson.project_build_root() / 'tmp_install/'
+ 
+ # DESTDIR + prefix appropriately munged
+ if build_system != 'windows'
+@@ -3374,7 +3374,7 @@ test('install_test_files',
+     is_parallel: false,
+     suite: ['setup'])
+ 
+-test_result_dir = meson.build_root() / 'testrun'
++test_result_dir = meson.project_build_root() / 'testrun'
+ 
+ 
+ # XXX: pg_regress doesn't assign unique ports on windows. To avoid the
+@@ -3385,12 +3385,12 @@ testport = 40000
+ 
+ test_env = environment()
+ 
+-test_initdb_template = meson.build_root() / 'tmp_install' / 'initdb-template'
++test_initdb_template = meson.project_build_root() / 'tmp_install' / 'initdb-template'
+ test_env.set('PG_REGRESS', pg_regress.full_path())
+ test_env.set('REGRESS_SHLIB', regress_module.full_path())
+ test_env.set('INITDB_TEMPLATE', test_initdb_template)
+ # for Cluster.pm's portlock logic
+-test_env.set('top_builddir', meson.build_root())
++test_env.set('top_builddir', meson.project_build_root())
+ 
+ # Test suites that are not safe by default but can be run if selected
+ # by the user via the whitespace-separated list in variable PG_TEST_EXTRA.
+@@ -3458,7 +3458,7 @@ testwrap = files('src/tools/testwrap')
+ foreach test_dir : tests
+   testwrap_base = [
+     testwrap,
+-    '--basedir', meson.build_root(),
++    '--basedir', meson.project_build_root(),
+     '--srcdir', test_dir['sd'],
+   ]
+ 
+@@ -3571,7 +3571,7 @@ foreach test_dir : tests
+ 
+       test_command = [
+         perl.path(),
+-        '-I', meson.source_root() / 'src/test/perl',
++        '-I', meson.project_source_root() / 'src/test/perl',
+         '-I', test_dir['sd'],
+       ]
+ 
+@@ -3687,7 +3687,7 @@ tar_gz = custom_target('tar.gz',
+             '--format', 'tar.gz',
+             '-9',
+             '--prefix', distdir + '/',
+-            '-o', join_paths(meson.build_root(), '@OUTPUT@'),
++            '-o', join_paths(meson.project_build_root(), '@OUTPUT@'),
+             pg_git_revision],
+   output: distdir + '.tar.gz',
+ )
+@@ -3701,7 +3701,7 @@ if bzip2.found()
+               'archive',
+               '--format', 'tar.bz2',
+               '--prefix', distdir + '/',
+-              '-o', join_paths(meson.build_root(), '@OUTPUT@'),
++              '-o', join_paths(meson.project_build_root(), '@OUTPUT@'),
+               pg_git_revision],
+     output: distdir + '.tar.bz2',
+   )
+diff --git a/src/backend/jit/llvm/meson.build b/src/backend/jit/llvm/meson.build
+index b76e2e70547..80f5090d2d7 100644
+--- a/src/backend/jit/llvm/meson.build
++++ b/src/backend/jit/llvm/meson.build
+@@ -68,9 +68,9 @@ bitcode_cflags += get_option('c_args')
+ bitcode_cflags += cppflags
+ 
+ # XXX: Worth improving on the logic to find directories here
+-bitcode_cflags += '-I@BUILD_ROOT@/src/include'
+-bitcode_cflags += '-I@BUILD_ROOT@/src/backend/utils/misc'
+-bitcode_cflags += '-I@SOURCE_ROOT@/src/include'
++bitcode_cflags += '-I@0@/src/include'.format(meson.project_build_root())
++bitcode_cflags += '-I@0@/src/backend/utils/misc'.format(meson.project_build_root())
++bitcode_cflags += '-I@0@/src/include'.format(meson.project_source_root())
+ 
+ 
+ # Note this is intentionally not installed to bitcodedir, as it's not for
+diff --git a/src/bin/psql/meson.build b/src/bin/psql/meson.build
+index f3a6392138a..9ba92cb163a 100644
+--- a/src/bin/psql/meson.build
++++ b/src/bin/psql/meson.build
+@@ -29,7 +29,7 @@ sql_help = custom_target('psql_help',
+   depfile: 'sql_help.dep',
+   command: [
+     perl, files('create_help.pl'),
+-    '--docdir', '@SOURCE_ROOT@/doc/src/sgml/ref',
++    '--docdir', '@0@/doc/src/sgml/ref'.format(meson.project_source_root()),
+     '--depfile', '@DEPFILE@',
+     '--outdir', '@OUTDIR@',
+     '--basename', 'sql_help',
+diff --git a/src/common/unicode/meson.build b/src/common/unicode/meson.build
+index b9a4181c320..0c6d37bae6e 100644
+--- a/src/common/unicode/meson.build
++++ b/src/common/unicode/meson.build
+@@ -174,7 +174,7 @@ update_unicode = custom_target('update-unicode',
+   depends: update_unicode_dep,
+   output: ['dont-exist'],
+   input: update_unicode_targets,
+-  command: [cp, '@INPUT@', '@SOURCE_ROOT@/src/include/common/'],
++  command: [cp, '@INPUT@', '@0@/src/include/common/'.format(meson.project_source_root())],
+   build_by_default: false,
+   build_always_stale: true,
+ )
+diff --git a/src/include/catalog/meson.build b/src/include/catalog/meson.build
+index f70d1daba52..0194baa3f9a 100644
+--- a/src/include/catalog/meson.build
++++ b/src/include/catalog/meson.build
+@@ -136,7 +136,7 @@ generated_catalog_headers = custom_target('generated_catalog_headers',
+   command: [
+     perl,
+     files('../../backend/catalog/genbki.pl'),
+-    '--include-path=@SOURCE_ROOT@/src/include',
++    '--include-path=@0@/src/include'.format(meson.project_source_root()),
+     '--set-version=' + pg_version_major.to_string(),
+     '--output=@OUTDIR@', '@INPUT@'
+   ],
+diff --git a/src/include/nodes/meson.build b/src/include/nodes/meson.build
+index b665e55b657..cef59ef8098 100644
+--- a/src/include/nodes/meson.build
++++ b/src/include/nodes/meson.build
+@@ -27,7 +27,7 @@ node_support_input_i = [
+ 
+ node_support_input = []
+ foreach i : node_support_input_i
+-  node_support_input += meson.source_root() / 'src' / 'include' / i
++  node_support_input += meson.project_source_root() / 'src' / 'include' / i
+ endforeach
+ 
+ node_support_output = [
+diff --git a/src/include/pch/meson.build b/src/include/pch/meson.build
+index 942d4c9956f..48a2e876176 100644
+--- a/src/include/pch/meson.build
++++ b/src/include/pch/meson.build
+@@ -1,6 +1,6 @@
+ # Copyright (c) 2022-2024, PostgreSQL Global Development Group
+ 
+ # See https://github.com/mesonbuild/meson/issues/10338
+-pch_c_h = meson.source_root() / meson.current_source_dir() / 'c_pch.h'
+-pch_postgres_h = meson.source_root() / meson.current_source_dir() / 'postgres_pch.h'
+-pch_postgres_fe_h = meson.source_root() / meson.current_source_dir() / 'postgres_fe_pch.h'
++pch_c_h = meson.project_source_root() / meson.current_source_dir() / 'c_pch.h'
++pch_postgres_h = meson.project_source_root() / meson.current_source_dir() / 'postgres_pch.h'
++pch_postgres_fe_h = meson.project_source_root() / meson.current_source_dir() / 'postgres_fe_pch.h'
+diff --git a/src/include/utils/meson.build b/src/include/utils/meson.build
+index 8d0cd456536..1173a728b50 100644
+--- a/src/include/utils/meson.build
++++ b/src/include/utils/meson.build
+@@ -62,7 +62,7 @@ fmgrtab_target = custom_target('fmgrtab',
+   input: '../catalog/pg_proc.dat',
+   output : fmgrtab_output,
+   depend_files: catalog_pm,
+-  command: [perl, '-I', '@SOURCE_ROOT@/src/backend/catalog/', files('../../backend/utils/Gen_fmgrtab.pl'), '--include-path=@SOURCE_ROOT@/src/include', '--output=@OUTDIR@', '@INPUT@'],
++  command: [perl, '-I', '@0@/src/backend/catalog/'.format(meson.project_source_root()), files('../../backend/utils/Gen_fmgrtab.pl'), '--include-path=@SOURCE_ROOT@/subprojects/postgresql-17.6/src/include', '--output=@OUTDIR@', '@INPUT@'],
+   install: true,
+   install_dir: [dir_include_server / 'utils', dir_include_server / 'utils', false],
+ )
+diff --git a/src/interfaces/ecpg/test/meson.build b/src/interfaces/ecpg/test/meson.build
+index a0d0f38d19a..021252a4d35 100644
+--- a/src/interfaces/ecpg/test/meson.build
++++ b/src/interfaces/ecpg/test/meson.build
+@@ -46,7 +46,7 @@ ecpg_preproc_test_command_start = [
+   ecpg_exe,
+   '--regression',
+   '-I@CURRENT_SOURCE_DIR@',
+-  '-I@SOURCE_ROOT@' + '/src/interfaces/ecpg/include/',
++  '-I@0@'.format(meson.project_source_root()) + '/src/interfaces/ecpg/include/',
+ ]
+ ecpg_preproc_test_command_end = [
+   '-o', '@OUTPUT@', '@INPUT@'
+diff --git a/src/makefiles/meson.build b/src/makefiles/meson.build
+index 5618050b306..5e8cbce9e0a 100644
+--- a/src/makefiles/meson.build
++++ b/src/makefiles/meson.build
+@@ -49,8 +49,8 @@ pgxs_kv = {
+   'PORTNAME': portname,
+   'PG_SYSROOT': pg_sysroot,
+ 
+-  'abs_top_builddir': meson.build_root(),
+-  'abs_top_srcdir': meson.source_root(),
++  'abs_top_builddir': meson.project_build_root(),
++  'abs_top_srcdir': meson.project_source_root(),
+ 
+   'enable_rpath': get_option('rpath') ? 'yes' : 'no',
+   'enable_nls': libintl.found() ? 'yes' : 'no',
+diff --git a/src/pl/plperl/meson.build b/src/pl/plperl/meson.build
+index 006f7356e6b..50e679f9161 100644
+--- a/src/pl/plperl/meson.build
++++ b/src/pl/plperl/meson.build
+@@ -96,7 +96,7 @@ tests += {
+       'plperl_transaction',
+       'plperl_env',
+     ],
+-    'regress_args': ['--dlpath', meson.build_root() / 'src/test/regress'],
++    'regress_args': ['--dlpath', meson.project_build_root() / 'src/test/regress'],
+   },
+ }
+ 
+diff --git a/src/test/modules/injection_points/meson.build b/src/test/modules/injection_points/meson.build
+index c1892d760aa..d0bdc8c78e6 100644
+--- a/src/test/modules/injection_points/meson.build
++++ b/src/test/modules/injection_points/meson.build
+@@ -36,7 +36,7 @@ tests += {
+       'reindex_conc',
+       'vacuum',
+     ],
+-    'regress_args': ['--dlpath', meson.build_root() / 'src/test/regress'],
++    'regress_args': ['--dlpath', meson.project_build_root() / 'src/test/regress'],
+     # The injection points are cluster-wide, so disable installcheck
+     'runningcheck': false,
+   },

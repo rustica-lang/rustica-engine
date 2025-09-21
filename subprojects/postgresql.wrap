@@ -1,0 +1,6 @@
+[wrap-file]
+directory = postgresql-17.6
+source_url = https://ftp.postgresql.org/pub/source/v17.6/postgresql-17.6.tar.gz
+source_filename = postgresql-17.6.tar.gz
+source_hash = 2910b85283674da2dae6ac13fe5ebbaaf3c482446396cba32e6728d3cc736d86
+diff_files = meson-0.56.patch
