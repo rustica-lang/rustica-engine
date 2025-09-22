@@ -4,6 +4,8 @@ project(
     default_options : []
 )
 
+# Include PostgreSQL subproject
+
 pg = subproject('postgresql', default_options: ['uuid=e2fs'])
 
 add_project_arguments(pg.get_variable('cflags'), language: ['c'])
@@ -32,17 +34,45 @@ postgres_pure_lib = static_library('postgres_lib',
     kwargs: pg.get_variable('internal_lib_args'),
 )
 
-backend_objs = [postgres_pure_lib.extract_all_objects(recursive: false)]
+# Include WAMR subproject
+
+cmake = import('cmake')
+wamr_var = cmake.subproject_options()
+wamr_var.add_cmake_defines({
+    'WAMR_BUILD_GC': 1,
+    'WAMR_BUILD_LIBC_BUILTIN': 0,
+    'WAMR_BUILD_LIBC_WASI': 0,
+    'WAMR_BUILD_DUMP_CALL_STACK': 1,
+    'WAMR_BUILD_LOAD_CUSTOM_SECTION': 1,
+    'WAMR_BUILD_CUSTOM_NAME_SECTION': 1,
+    'WAMR_BUILD_FAST_INTERP': 0,
+    'WAMR_BUILD_EXTENDED_CONST_EXPR': 1,
+
+    # https://github.com/bytecodealliance/wasm-micro-runtime/issues/4640
+    'CMAKE_C_FLAGS': '-fzero-init-padding-bits=unions',
+})
+wamr = cmake.subproject('wamr', options: wamr_var)
+vmlib = wamr.dependency('vmlib')
+
+uncommon_shared_lib = shared_library('uncommon_shared',
+    wamr.get_cmake_variable('UNCOMMON_SHARED_SOURCE'),
+    dependencies: [vmlib],
+)
+
+# Build the rustica-engine executable
 
 executable('rustica-engine',
     'main.c',
     sources: pg.get_variable('post_export_backend_sources'),
-    objects: backend_objs,
+    objects: [
+        postgres_pure_lib.extract_all_objects(recursive: false),
+        uncommon_shared_lib.extract_all_objects(recursive: false),
+    ],
     link_args: pg.get_variable('backend_link_args'),
     link_with: backend_link_with,
     link_depends: pg.get_variable('backend_link_depends'),
     export_dynamic: true,
     implib: 'postgres',
-    dependencies: backend_build_deps,
+    dependencies: backend_build_deps + [vmlib],
     kwargs: pg.get_variable('default_bin_args'),
 )

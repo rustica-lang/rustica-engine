@@ -1,7 +1,12 @@
+#include <wchar.h>
+
 #include "postgres.h"
 #include "getopt_long.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "bh_platform.h"
+#include "bh_read_file.h"
+#include "wasm_export.h"
 
 const char *progname;
 
@@ -9,15 +14,24 @@ const char *progname;
 static void init_locale(const char *categoryname, int category, const char *locale);
 
 static void
-help(const char *progname)
+help()
 {
-	printf(_("%s is a custom PostgreSQL CLI tool.\n\n"), progname);
+	printf(_("%s is a WebAssembly runtime with PostgreSQL backend.\n\n"), progname);
 	printf(_("Usage:\n"));
-	printf(_("  %s [OPTION]...\n\n"), progname);
+	printf(_("  %s [OPTION]... <wasm_file>\n\n"), progname);
 	printf(_("Options:\n"));
 	printf(_("  -h, --help     show this help, then exit\n"));
 	printf(_("  -V, --version  output version information, then exit\n"));
 }
+
+static void
+print_char(wasm_exec_env_t exec_env, int ch) {
+	wprintf(L"%lc", ch);
+}
+
+static NativeSymbol native_symbols[] = {
+	{ "print_char", print_char, "(i)", NULL },
+};
 
 int
 main(int argc, char *argv[])
@@ -29,6 +43,9 @@ main(int argc, char *argv[])
 	};
 
 	int			c;
+	char error_buf[128];
+	uint32 size;
+	uint8_t *buffer;
 
 	progname = get_progname(argv[0]);
 
@@ -46,15 +63,16 @@ main(int argc, char *argv[])
 
 	unsetenv("LC_ALL");
 
+	// 先处理命令行选项
 	while ((c = getopt_long(argc, argv, "hV", long_options, NULL)) != -1)
 	{
 		switch (c)
 		{
 			case 'h':
-				help(progname);
+				help();
 				exit(0);
 			case 'V':
-				puts("rustica_cli (PostgreSQL) " PG_VERSION);
+				printf("%s (PostgreSQL %s)\n", progname, PG_VERSION);
 				exit(0);
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
@@ -62,9 +80,58 @@ main(int argc, char *argv[])
 		}
 	}
 
-	printf("Hello from Rustica CLI!\n");
-	printf("This is a custom PostgreSQL-based CLI tool.\n");
-	printf("You can add your custom logic here.\n");
+	// 检查是否提供了wasm文件路径
+	if (optind >= argc) {
+		fprintf(stderr, "Error: No wasm file specified\n");
+		fprintf(stderr, "Usage: %s [OPTION]... <wasm_file>\n", progname);
+		fprintf(stderr, "Try '%s --help' for more information.\n", progname);
+		return 1;
+	}
+
+	// 初始化WASM运行时并加载文件
+	wasm_runtime_init();
+	buffer = (uint8_t *)bh_read_file_to_buffer(argv[optind], &size);
+	if (!buffer) {
+		fprintf(stderr, "Error: Failed to read file: %s\n", argv[optind]);
+		return 1;
+	}
+
+	wasm_runtime_register_natives("spectest", native_symbols, 1);
+	wasm_module_t module = wasm_runtime_load(buffer, size, error_buf, sizeof(error_buf));
+	if (!module) {
+		fprintf(stderr, "Error loading wasm module: %s\n", error_buf);
+		return 1;
+	}
+
+	wasm_module_inst_t module_inst = wasm_runtime_instantiate(module, 32768, 32768,
+									   error_buf, sizeof(error_buf));
+	if (!module_inst) {
+		fprintf(stderr, "Error instantiating wasm module: %s\n", error_buf);
+		return 1;
+	}
+
+	wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(module_inst, 32768);
+	if (!exec_env) {
+		fprintf(stderr, "Error creating execution environment\n");
+		return 1;
+	}
+
+	wasm_function_inst_t start_func = wasm_runtime_lookup_function(module_inst, "_start");
+	if (!start_func) {
+		fprintf(stderr, "Error: _start function not found\n");
+		return 1;
+	}
+
+	wasm_runtime_call_wasm(exec_env, start_func, 0, NULL);
+	const char *exc = wasm_runtime_get_exception(module_inst);
+	if (exc)
+		printf("Exception: %s\n", exc);
+
+	// 清理资源
+	wasm_runtime_destroy_exec_env(exec_env);
+	wasm_runtime_deinstantiate(module_inst);
+	wasm_runtime_unload(module);
+	wasm_runtime_destroy();
 
 	return 0;
 }

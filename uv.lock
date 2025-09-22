@@ -1,0 +1,23 @@
+version = 1
+revision = 3
+requires-python = ">=3.9"
+
+[[package]]
+name = "meson"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/8a/8315a2711dd269533019d7fdad1cf79416aadff454c539c2da88bc6e7200/meson-1.9.0.tar.gz", hash = "sha256:cd27277649b5ed50d19875031de516e270b22e890d9db65ed9af57d18ebc498d", size = 2366082, upload-time = "2025-08-24T17:01:46.984Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/ed/a449e8fb5764a7f6df6e887a2d350001deca17efd6ecd5251d2fb6202009/meson-1.9.0-py3-none-any.whl", hash = "sha256:45e51ddc41e37d961582d06e78c48e0f9039011587f3495c4d6b0781dad92357", size = 1029634, upload-time = "2025-08-24T17:01:44.14Z" },
+]
+
+[[package]]
+name = "rustica-engine"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "meson" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "meson", specifier = ">=1.9.0" }]
