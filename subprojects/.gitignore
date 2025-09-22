@@ -1,3 +1,4 @@
 /packagecache/
 .wraplock
 /postgresql-*/
+/wasm-micro-runtime-WAMR-*/
