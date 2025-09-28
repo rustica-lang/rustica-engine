@@ -1,0 +1,32 @@
+commit df7ab8d44e03dd74aee14a0a8b48dfbdcce22a9a
+Author: Xenia Lu <xenia.lyy@gmail.com>
+Date:   Sun Sep 28 15:52:17 2025 +0800
+
+    Don't print stack by default
+
+diff --git a/core/iwasm/interpreter/wasm_interp_classic.c b/core/iwasm/interpreter/wasm_interp_classic.c
+index d0ac01bd..92bee750 100644
+--- a/core/iwasm/interpreter/wasm_interp_classic.c
++++ b/core/iwasm/interpreter/wasm_interp_classic.c
+@@ -7547,7 +7547,7 @@ wasm_interp_call_wasm(WASMModuleInstance *module_inst, WASMExecEnv *exec_env,
+     else {
+ #if WASM_ENABLE_DUMP_CALL_STACK != 0
+         if (wasm_interp_create_call_stack(exec_env)) {
+-            wasm_interp_dump_call_stack(exec_env, true, NULL, 0);
++            wasm_interp_dump_call_stack(exec_env, false, NULL, 0);
+         }
+ #endif
+     }
+diff --git a/core/iwasm/interpreter/wasm_interp_fast.c b/core/iwasm/interpreter/wasm_interp_fast.c
+index 36d4538f..7b17dfa7 100644
+--- a/core/iwasm/interpreter/wasm_interp_fast.c
++++ b/core/iwasm/interpreter/wasm_interp_fast.c
+@@ -7982,7 +7982,7 @@ wasm_interp_call_wasm(WASMModuleInstance *module_inst, WASMExecEnv *exec_env,
+     else {
+ #if WASM_ENABLE_DUMP_CALL_STACK != 0
+         if (wasm_interp_create_call_stack(exec_env)) {
+-            wasm_interp_dump_call_stack(exec_env, true, NULL, 0);
++            wasm_interp_dump_call_stack(exec_env, false, NULL, 0);
+         }
+ #endif
+     }
