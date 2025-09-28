@@ -47,9 +47,10 @@ wamr_var.add_cmake_defines({
     'WAMR_BUILD_CUSTOM_NAME_SECTION': 1,
     'WAMR_BUILD_FAST_INTERP': 0,
     'WAMR_BUILD_EXTENDED_CONST_EXPR': 1,
+    'WAMR_BUILD_EXCE_HANDLING': 1,
 
     # https://github.com/bytecodealliance/wasm-micro-runtime/issues/4640
-    'CMAKE_C_FLAGS': '-fzero-init-padding-bits=unions',
+    'CMAKE_C_FLAGS': '-fzero-init-padding-bits=unions -Wno-incompatible-pointer-types',
 })
 wamr = cmake.subproject('wamr', options: wamr_var)
 vmlib = wamr.dependency('vmlib')
@@ -62,12 +63,17 @@ uncommon_shared_lib = shared_library('uncommon_shared',
 # Build the rustica-engine executable
 
 executable('rustica-engine',
-    'main.c',
+    [
+        'src/rustica/main.c',
+        'src/rustica/env.c',
+        'src/rustica/moontest.c',
+    ],
     sources: pg.get_variable('post_export_backend_sources'),
     objects: [
         postgres_pure_lib.extract_all_objects(recursive: false),
         uncommon_shared_lib.extract_all_objects(recursive: false),
     ],
+    include_directories: 'src',
     link_args: pg.get_variable('backend_link_args'),
     link_with: backend_link_with,
     link_depends: pg.get_variable('backend_link_depends'),

@@ -1,0 +1,80 @@
+commit 8ff0666fc2cf81d4561ec277e75a0971260bea88
+Author: Xenia Lu <xenia.lyy@gmail.com>
+Date:   Sun Sep 28 15:49:50 2025 +0800
+
+    Fix false OOB in array.fill
+
+diff --git a/core/iwasm/interpreter/wasm_interp_classic.c b/core/iwasm/interpreter/wasm_interp_classic.c
+index edc473f2..d0ac01bd 100644
+--- a/core/iwasm/interpreter/wasm_interp_classic.c
++++ b/core/iwasm/interpreter/wasm_interp_classic.c
+@@ -3162,7 +3162,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
+ 
+                         if (len > 0) {
+                             if ((uint64)start_offset + len
+-                                >= wasm_array_obj_length(array_obj)) {
++                                > wasm_array_obj_length(array_obj)) {
+                                 wasm_set_exception(
+                                     module, "out of bounds array access");
+                                 goto got_exception;
+diff --git a/tests/regression/ba-issues/issues/issue-4644/test.wasm b/tests/regression/ba-issues/issues/issue-4644/test.wasm
+new file mode 100644
+index 00000000..21e0386d
+Binary files /dev/null and b/tests/regression/ba-issues/issues/issue-4644/test.wasm differ
+diff --git a/tests/regression/ba-issues/issues/issue-4644/test.wat b/tests/regression/ba-issues/issues/issue-4644/test.wat
+new file mode 100644
+index 00000000..738d427c
+--- /dev/null
++++ b/tests/regression/ba-issues/issues/issue-4644/test.wat
+@@ -0,0 +1,24 @@
++;; define array type - i32 array
++(type $i32_array (array (mut i32)))
++
++;; main function
++(func $main
++  (local $arr (ref $i32_array))
++
++  ;; create an i32 array of size 10 with initial value 0
++  (array.new $i32_array
++    (i32.const 0)    ;; initial value
++    (i32.const 10))  ;; array size
++  (local.set $arr)
++
++  ;; fill array using array.fill
++  (array.fill $i32_array
++    (local.get $arr)  ;; array reference
++    (i32.const 0)     ;; start index
++    (i32.const 42)    ;; fill value
++    (i32.const 10))   ;; fill length - fill entire array
++)
++
++(memory 1)
++(export "memory" (memory 0))
++(export "_start" (func $main))
+diff --git a/tests/regression/ba-issues/running_config.json b/tests/regression/ba-issues/running_config.json
+index 9288eb97..df8e32d2 100644
+--- a/tests/regression/ba-issues/running_config.json
++++ b/tests/regression/ba-issues/running_config.json
+@@ -1754,6 +1754,22 @@
+                 "stdout content": "",
+                 "description": "no sanitizer 'heap-buffer-overflow'"
+             }
++        },
++        {
++            "deprecated": false,
++            "ids": [
++                4644
++            ],
++            "runtime": "iwasm-default-gc-enabled",
++            "file": "test.wasm",
++            "mode": "classic-interp",
++            "options": "-f _start",
++            "argument": "",
++            "expected return": {
++                "ret code": 0,
++                "stdout content": "",
++                "description": "no out of bound exception"
++            }
+         }
+     ]
+ }
