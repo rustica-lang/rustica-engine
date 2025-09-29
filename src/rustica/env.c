@@ -4,6 +4,7 @@
 
 #include "postgres.h"
 #include "mb/pg_wchar.h"
+#include "portability/instr_time.h"
 
 #include "rustica/env.h"
 
@@ -204,8 +205,28 @@ time_now(wasm_exec_env_t exec_env) {
     return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+static wasm_externref_obj_t
+time_instant_now(wasm_exec_env_t exec_env) {
+    rustica_value_t rv = rustica_value_new(RUSTICA_ENV_INSTR_TIME, NULL, sizeof(instr_time));
+    INSTR_TIME_SET_CURRENT(*rv->instr_time);
+    return rustica_value_to_wasm(exec_env, rv);
+}
+
+static double
+time_instant_elapsed_as_secs_f64(wasm_exec_env_t exec_env, wasm_obj_t ref) {
+    rustica_value_t val =
+        rustica_value_from_wasm(ref, RUSTICA_ENV_INSTR_TIME);
+    instr_time it;
+    INSTR_TIME_SET_CURRENT(it);
+    INSTR_TIME_SUBTRACT(it, *val->instr_time);
+    return INSTR_TIME_GET_DOUBLE(it);
+}
+
+
 static NativeSymbol time_symbols[] = {
     { "now", time_now, "()I", NULL },
+    { "instant_now", time_instant_now, "()r", NULL },
+    { "instant_elapsed_as_secs_f64", time_instant_elapsed_as_secs_f64, "(r)F", NULL },
 };
 
 void
