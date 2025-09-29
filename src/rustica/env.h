@@ -1,10 +1,12 @@
 #ifndef RUSTICA_ENV_H
 #define RUSTICA_ENV_H
 
+#include "portability/instr_time.h"
 #include "gc_export.h"
 
 #define RUSTICA_ENV_CSTRING 0x01
-#define RUSTICA_ENV_CSTRING_ARRAY 0x01
+#define RUSTICA_ENV_CSTRING_ARRAY 0x02
+#define RUSTICA_ENV_INSTR_TIME 0x03
 
 extern char **saved_argv;
 extern int saved_argc;
@@ -22,6 +24,7 @@ typedef struct RusticaValue {
         void *ptr;
         char data[];
         RusticaPointerArray arr[];
+        instr_time instr_time[];
     };
 } RusticaValue;
 
