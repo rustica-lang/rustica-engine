@@ -76,7 +76,7 @@ static NativeSymbol spectest_symbols[] = {
 static void
 exception_throw(wasm_exec_env_t exec_env) {
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    wasm_runtime_set_exception(inst, "exception thrown by stdc++");
+    wasm_runtime_set_exception(inst, "panic");
 }
 
 static NativeSymbol exception_symbols[] = {

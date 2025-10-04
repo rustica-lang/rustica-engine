@@ -81,4 +81,5 @@ executable('rustica-engine',
     implib: 'postgres',
     dependencies: backend_build_deps + [vmlib],
     kwargs: pg.get_variable('default_bin_args'),
+    c_args: wamr.get_cmake_definitions('-DWASM'),
 )
