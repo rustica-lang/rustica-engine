@@ -6,6 +6,7 @@
 #include "bh_platform.h"
 #include "bh_read_file.h"
 #include "gc_export.h"
+#include "wasm_exec_env.h"
 
 #include "rustica/env.h"
 #include "rustica/moontest.h"
@@ -180,6 +181,7 @@ main(int argc, char *argv[]) {
         fprintf(stderr, "Error creating execution environment\n");
         return 1;
     }
+    exec_env->disable_dump_call_stack = true;
 
     PG_TRY();
     {
