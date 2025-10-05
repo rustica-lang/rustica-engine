@@ -59,6 +59,7 @@ vmlib = wamr.dependency('vmlib')
 uncommon_shared_lib = shared_library('uncommon_shared',
     wamr.get_cmake_variable('UNCOMMON_SHARED_SOURCE'),
     dependencies: [vmlib],
+    c_args: ['-DBH_MALLOC=palloc', '-DBH_FREE=pfree'],
 )
 
 # Build the rustica-engine executable
