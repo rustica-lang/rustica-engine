@@ -43,11 +43,13 @@ wamr_var.add_cmake_defines({
     'WAMR_BUILD_LIBC_BUILTIN': 0,
     'WAMR_BUILD_LIBC_WASI': 0,
     'WAMR_BUILD_DUMP_CALL_STACK': 1,
+    'WAMR_BUILD_AOT_STACK_FRAME': 1,
     'WAMR_BUILD_LOAD_CUSTOM_SECTION': 1,
     'WAMR_BUILD_CUSTOM_NAME_SECTION': 1,
-    'WAMR_BUILD_FAST_INTERP': 0,
+    'WAMR_BUILD_TAIL_CALL': 1,
     'WAMR_BUILD_EXTENDED_CONST_EXPR': 1,
     'WAMR_BUILD_EXCE_HANDLING': 1,
+    'WAMR_BUILD_JIT': 1,
 
     # https://github.com/bytecodealliance/wasm-micro-runtime/issues/4640
     'CMAKE_C_FLAGS': '-fzero-init-padding-bits=unions -Wno-incompatible-pointer-types',

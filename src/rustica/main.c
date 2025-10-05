@@ -6,6 +6,7 @@
 #include "bh_platform.h"
 #include "bh_read_file.h"
 #include "gc_export.h"
+#include "aot_export.h"
 
 #include "rustica/env.h"
 #include "rustica/moontest.h"
@@ -22,7 +23,10 @@ static void
 run_moontest(wasm_exec_env_t exec_env, va_list args);
 
 static void
-run_wasm_with(const char *wasm_file, void (*fn)(wasm_exec_env_t, va_list), ...);
+run_wasm_with(const char *wasm_file,
+              bool use_aot,
+              void (*fn)(wasm_exec_env_t, va_list),
+              ...);
 
 static void
 init_locale(const char *categoryname, int category, const char *locale);
@@ -43,19 +47,47 @@ help() {
     printf(_("  %s run <wasm_file>\n"), progname);
     printf(_("  %s moontest --spec <JSON> <wasm_file>\n\n"), progname);
     printf(_("Options:\n"));
+    printf(_("  -m, --mode     compilation mode: aot, jit\n"));
     printf(_("  -h, --help     show this help, then exit\n"));
     printf(_("  -V, --version  output version information, then exit\n"));
 }
 
 static Subcommand
-parse_args(int argc, char **argv) {
-    struct option long_options[] = { { "help", no_argument, NULL, 'h' },
+parse_args(int argc, char **argv, bool *out_aot) {
+    struct option long_options[] = { { "mode", required_argument, NULL, 'm' },
+                                     { "help", no_argument, NULL, 'h' },
                                      { "version", no_argument, NULL, 'V' },
                                      { NULL, 0, NULL, 0 } };
 
     int c;
+    const char *mode = getenv("RUSTICA_ENGINE_MODE");
+    if (mode) {
+        if (strcasecmp(mode, "aot") == 0)
+            *out_aot = true;
+        else if (strcasecmp(mode, "jit") == 0)
+            *out_aot = false;
+        else
+            ereport(ERROR,
+                    (errmsg("Unknown RUSTICA_ENGINE_MODE value '%s', "
+                            "available: aot, jit",
+                            mode)));
+    }
+
     while ((c = getopt_long(argc, argv, "+m:hV", long_options, NULL)) != -1) {
         switch (c) {
+            case 'm':
+                if (!optarg)
+                    ereport(ERROR, errmsg("-m requires an argument"));
+                if (strcasecmp(optarg, "aot") == 0)
+                    *out_aot = true;
+                else if (strcasecmp(optarg, "jit") == 0)
+                    *out_aot = false;
+                else
+                    ereport(ERROR,
+                            (errmsg("Unknown mode '%s', available: aot, jit",
+                                    optarg)));
+                break;
+
             case 'h':
                 return HELP;
 
@@ -84,6 +116,7 @@ parse_args(int argc, char **argv) {
 
 int
 main(int argc, char *argv[]) {
+    bool use_aot = true;
     int rv = 0;
 
     saved_argc = argc;
@@ -106,12 +139,12 @@ main(int argc, char *argv[]) {
 
     PG_TRY();
     {
-        Subcommand subcmd = parse_args(argc, argv);
+        Subcommand subcmd = parse_args(argc, argv, &use_aot);
         switch (subcmd) {
             case RUN:
                 if (optind >= argc)
                     ereport(ERROR, errmsg("No wasm file specified for 'run'"));
-                run_wasm_with(argv[optind], run_start);
+                run_wasm_with(argv[optind], use_aot, run_start);
                 break;
 
             case MOONTEST:
@@ -122,7 +155,10 @@ main(int argc, char *argv[]) {
                                         &moontest_spec,
                                         &wasm_file)) {
                     if (wasm_file)
-                        run_wasm_with(wasm_file, run_moontest, moontest_spec);
+                        run_wasm_with(wasm_file,
+                                      use_aot,
+                                      run_moontest,
+                                      moontest_spec);
                 }
                 else {
                     rv = 1;
@@ -162,7 +198,7 @@ init_wamr() {
                                              .realloc_func = repalloc,
                                              .free_func = pfree } },
         .gc_heap_size = (uint32_t)HEAP_M * 1024 * 1024,
-        .running_mode = Mode_Interp,
+        .running_mode = Mode_LLVM_JIT,
     };
 
     if (!wasm_runtime_full_init(&init_args))
@@ -199,6 +235,66 @@ load_wasm_module(uint8_t *buffer, const uint32_t size) {
     return module;
 }
 
+static inline uint8_t *
+compile_aot(uint8_t *byte_code,
+            const uint32_t size,
+            uint32_t *out_aot_file_size) {
+    AOTCompOption option = {
+        .enable_gc = true,
+        .aux_stack_frame_type = AOT_STACK_FRAME_TYPE_STANDARD,
+        .call_stack_features = {
+            .func_idx = true,
+            .bounds_checks = true,
+            .values = true,
+        },
+        .enable_tail_call = true,
+        .enable_extended_const = true,
+        .output_format = AOT_FORMAT_FILE,
+        .enable_simd = true,
+        .enable_aux_stack_check = true,
+        .bounds_checks = true,
+        .enable_bulk_memory = true,
+    };
+    wasm_module_t module = NULL;
+    aot_comp_data_t comp_data = NULL;
+    aot_comp_context_t comp_ctx = NULL;
+    uint8_t *rv = NULL;
+
+    PG_TRY();
+    {
+        module = load_wasm_module(byte_code, size);
+        if (!(comp_data = aot_create_comp_data(module, NULL, true)))
+            ereport(ERROR,
+                    (errmsg("Error creating AOT compilation data: %s",
+                            aot_get_last_error())));
+        if (!(comp_ctx = aot_create_comp_context(comp_data, &option)))
+            ereport(ERROR,
+                    (errmsg("Error creating AOT compilation context: %s",
+                            aot_get_last_error())));
+        if (!aot_compile_wasm(comp_ctx))
+            ereport(ERROR,
+                    (errmsg("Error compiling wasm module: %s",
+                            aot_get_last_error())));
+        if (!(rv = aot_emit_aot_file_buf(comp_ctx,
+                                         comp_data,
+                                         out_aot_file_size)))
+            ereport(
+                ERROR,
+                (errmsg("Error emitting AOT file: %s", aot_get_last_error())));
+    }
+    PG_FINALLY();
+    {
+        if (comp_ctx)
+            aot_destroy_comp_context(comp_ctx);
+        if (comp_data)
+            aot_destroy_comp_data(comp_data);
+        if (module)
+            wasm_runtime_unload(module);
+    }
+    PG_END_TRY();
+    return rv;
+}
+
 static void
 run_start(wasm_exec_env_t exec_env, va_list args) {
     wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
@@ -231,6 +327,7 @@ run_moontest(wasm_exec_env_t exec_env, va_list args) {
 
 static void
 run_wasm_with(const char *wasm_file,
+              bool use_aot,
               void (*fn)(wasm_exec_env_t, va_list),
               ...) {
     bool wamr_inited = false;
@@ -246,6 +343,11 @@ run_wasm_with(const char *wasm_file,
         init_wamr();
         wamr_inited = true;
         buffer = read_wasm_file(wasm_file, &size);
+        if (use_aot) {
+            uint8_t *aot_buffer = compile_aot(buffer, size, &size);
+            pfree(buffer);
+            buffer = aot_buffer;
+        }
         module = load_wasm_module(buffer, size);
         {
             char error_buf[128];
