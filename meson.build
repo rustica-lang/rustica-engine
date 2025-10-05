@@ -51,6 +51,7 @@ wamr_var.add_cmake_defines({
 
     # https://github.com/bytecodealliance/wasm-micro-runtime/issues/4640
     'CMAKE_C_FLAGS': '-fzero-init-padding-bits=unions -Wno-incompatible-pointer-types',
+    'WAMR_BH_VPRINTF': 'pg_log_vprintf',
 })
 wamr = cmake.subproject('wamr', options: wamr_var)
 vmlib = wamr.dependency('vmlib')
