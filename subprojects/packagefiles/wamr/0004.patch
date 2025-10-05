@@ -1,0 +1,25 @@
+From 0df937642752c70d4d67136554c17c4f1430282f Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Sun, 5 Oct 2025 09:36:44 +0800
+Subject: [PATCH 4/4] fix: typo in AOT stack dump with GC
+
+---
+ core/iwasm/aot/aot_runtime.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/core/iwasm/aot/aot_runtime.c b/core/iwasm/aot/aot_runtime.c
+index d2621fb2..85d7a3ca 100644
+--- a/core/iwasm/aot/aot_runtime.c
++++ b/core/iwasm/aot/aot_runtime.c
+@@ -4477,7 +4477,7 @@ aot_create_call_stack(struct WASMExecEnv *exec_env)
+             frame.frame_ref = (uint8 *)frame.lp + (frame_ref - (uint8 *)lp);
+             /* copy local ref flags from AOT module */
+             bh_memcpy_s(frame.frame_ref, local_ref_flags_cell_num,
+-                        local_ref_flags, lp_size);
++                        local_ref_flags, local_ref_flags_cell_num);
+ #endif
+         }
+ 
+-- 
+2.51.0
+
