@@ -14,16 +14,18 @@ struct option moontest_options[] = { { "spec", required_argument, NULL, 's' },
                                      { "help", no_argument, NULL, 'h' },
                                      { NULL, 0, NULL, 0 } };
 
-int
+bool
 moontest_parse_args(int argc,
                     char *argv[],
-                    const char **moontest_spec,
-                    const char **wasm_file) {
+                    const char **out_spec,
+                    const char **out_wasm_file) {
     int c;
-    while ((c = getopt_long(argc, argv, "s:h", moontest_options, NULL)) != -1) {
+    const char *spec = NULL;
+    while ((c = getopt_long(argc, argv, "+s:h", moontest_options, NULL))
+           != -1) {
         switch (c) {
             case 's':
-                *moontest_spec = optarg;
+                spec = optarg;
                 break;
             case 'h':
                 printf(_("Usage:\n"));
@@ -32,23 +34,20 @@ moontest_parse_args(int argc,
                 printf(_(
                     "  --spec <JSON>    JSON spec describing tests to run\n"));
                 printf(_("  -h, --help       show this help, then exit\n"));
-                return 0;
+                *out_wasm_file = NULL;
+                *out_spec = spec;
+                return true;
             default:
-                fprintf(stderr, "Unknown option for 'moontest'\n");
-                return 1;
+                return false;
         }
     }
-    if (optind < argc)
-        *wasm_file = argv[optind];
-    if (!*moontest_spec) {
-        fprintf(stderr, "Error: --spec <JSON> is required for 'moontest'\n");
-        return 1;
-    }
-    if (!*wasm_file) {
-        fprintf(stderr, "Error: No wasm file specified for 'moontest'\n");
-        return 1;
-    }
-    return 0;
+    if (optind >= argc)
+        ereport(ERROR, (errmsg("No wasm file specified for 'moontest'")));
+    if (!spec)
+        ereport(ERROR, (errmsg("--spec requires an argument")));
+    *out_wasm_file = argv[optind];
+    *out_spec = spec;
+    return true;
 }
 
 typedef enum Expect {
