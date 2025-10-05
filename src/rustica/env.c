@@ -246,3 +246,32 @@ rustica_register_natives() {
                                   time_symbols,
                                   sizeof(time_symbols) / sizeof(NativeSymbol));
 }
+
+int
+pg_log_vprintf(const char *format, va_list ap) {
+    int rv = 0;
+    ereport_domain(
+        LOG,
+        "WAMR",
+        (
+            {
+                StringInfoData buf;
+                initStringInfo(&buf);
+                for (;;) {
+                    const int needed = appendStringInfoVA(&buf, format, ap);
+                    if (needed == 0)
+                        break;
+                    enlargeStringInfo(&buf, needed);
+                }
+                while (buf.len > 0 && buf.data[buf.len - 1] == '\n') {
+                    buf.data[buf.len - 1] = '\0';
+                    buf.len -= 1;
+                }
+                rv = buf.len;
+                errmsg_internal(buf.data);
+                pfree(buf.data);
+            }
+        )
+    );
+    return rv;
+}
