@@ -178,7 +178,7 @@ read_wasm_file(const char *wasm_file, uint32_t *out_size) {
 
     // 检查文件扩展名是否为 .wasm
     dot = strrchr(wasm_file, '.');
-    if (!dot || strcmp(dot, ".wasm") != 0) {
+    if (!dot || strcasecmp(dot, ".wasm") != 0) {
         ereport(ERROR, (errmsg("Unsupported file type: %s", wasm_file)));
     }
 
