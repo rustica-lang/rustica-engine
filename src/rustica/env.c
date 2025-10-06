@@ -6,6 +6,8 @@
 #include "mb/pg_wchar.h"
 #include "portability/instr_time.h"
 
+#include "bh_log.h"
+
 #include "rustica/env.h"
 
 char **saved_argv;
@@ -277,4 +279,48 @@ pg_log_vprintf(const char *format, va_list ap) {
                        pfree(buf.data);
                    }));
     return rv;
+}
+
+void
+pg_bh_log(LogLevel log_level, const char *file, int line, const char *fmt, ...) {
+    int elevel = LOG;
+    switch (log_level) {
+        case BH_LOG_LEVEL_FATAL:
+            elevel = FATAL;
+            break;
+        case BH_LOG_LEVEL_ERROR:
+            elevel = ERROR;
+            break;
+        case BH_LOG_LEVEL_WARNING:
+            elevel = WARNING;
+            break;
+        case BH_LOG_LEVEL_DEBUG:
+            elevel = DEBUG1;
+            break;
+        case BH_LOG_LEVEL_VERBOSE:
+            elevel = DEBUG3;
+            break;
+    }
+    do {
+        pg_prevent_errno_in_scope();
+        if (errstart(elevel, "WAMR")) {
+            StringInfoData buf;
+            initStringInfo(&buf);
+            for (;;) {
+                va_list ap;
+                int needed;
+                va_start(ap, fmt);
+                needed = appendStringInfoVA(&buf, fmt, ap);
+                va_end(ap);
+                if (needed == 0)
+                    break;
+                enlargeStringInfo(&buf, needed);
+            }
+            errmsg_internal(buf.data);
+            pfree(buf.data);
+            errfinish(file, line, "-");
+        }
+        if (elevel >= ERROR)
+            pg_unreachable();
+    } while(0);
 }
