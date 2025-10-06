@@ -6,4 +6,5 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "meson>=1.9.0",
+    "requests>=2.32.5",
 ]

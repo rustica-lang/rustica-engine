@@ -15,7 +15,6 @@ Rustica Engine 是一个将 WebAssembly 运行时 (WAMR) 与 PostgreSQL 后端�
 ### 依赖项
 
 #### 构建工具
-- **Python** >= 3.13
 - **Meson** >= 1.9.0
 - **Ninja** (构建后端)
 - **uv** (Python 包管理器)
@@ -69,7 +68,7 @@ sudo apt-get install -y \
     libldap2-dev \
     libsystemd-dev
 
-# 安装 Python 和 uv
+# 安装 uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
@@ -120,7 +119,12 @@ uv sync
 uv run meson.py setup build
 ```
 
-4. 编译 rustica-engine：
+4. 构建 LLVM：
+```bash
+uv run subprojects/wasm-*/build-scripts/build_llvm.py
+```
+
+5. 编译 rustica-engine：
 ```bash
 ninja -C build rustica-engine
 ```
@@ -129,7 +133,7 @@ ninja -C build rustica-engine
 
 运行 WebAssembly 文件：
 ```bash
-./build/rustica-engine <wasm_file_path>
+./build/rustica-engine run <wasm_file_path>
 ```
 
 查看帮助信息：
@@ -146,7 +150,7 @@ ninja -C build rustica-engine
 
 ```bash
 # 运行一个 WebAssembly 模块
-./build/rustica-engine example.wasm
+./build/rustica-engine run example.wasm
 
 # 查看版本
 ./build/rustica-engine -V
