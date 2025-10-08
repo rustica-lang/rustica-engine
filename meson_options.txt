@@ -1,0 +1,12 @@
+option(
+    'embed_libs',
+    type: 'boolean',
+    value: false,
+    description: 'Link all dependencies statically except libc',
+)
+option(
+    'llvm_dir',
+    type: 'string',
+    value: '',
+    description: 'Path to a pre-built LLVM toolchain to use for building WAMR',
+)

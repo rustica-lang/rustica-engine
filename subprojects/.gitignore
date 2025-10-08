@@ -2,3 +2,9 @@
 .wraplock
 /postgresql-*/
 /wasm-micro-runtime-WAMR-*/
+/util-linux-*/
+/lz4-*/
+/icu/
+/openssl-*/
+/llvm-project-*.src/
+/zlib-*/
