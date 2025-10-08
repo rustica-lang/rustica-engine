@@ -119,12 +119,7 @@ uv sync
 uv run meson.py setup build
 ```
 
-4. 构建 LLVM：
-```bash
-uv run subprojects/wasm-*/build-scripts/build_llvm.py
-```
-
-5. 编译 rustica-engine：
+4. 编译 rustica-engine：
 ```bash
 ninja -C build rustica-engine
 ```

@@ -1,2 +1,4 @@
 /.venv/
+/build/
+/build-staging/
 /.python-version

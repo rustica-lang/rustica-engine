@@ -1,0 +1,47 @@
+--- a/meson.build	2025-10-08 11:20:39.778284410 +0800
++++ b/meson.build	2025-10-08 11:21:46.519045315 +0800
+@@ -1369,11 +1369,8 @@
+       ssl_int = [ssl_lib, crypto_lib]
+       ssl = declare_dependency(dependencies: ssl_int, include_directories: postgres_inc)
+     endif
+-  elif cc.has_header('openssl/ssl.h', args: test_c_args, dependencies: ssl, required: openssl_required) and \
+-       cc.has_header('openssl/err.h', args: test_c_args, dependencies: ssl, required: openssl_required)
+-    ssl_int = [ssl]
+   else
+-    ssl = not_found_dep
++    ssl_int = [ssl]
+   endif
+ 
+   if ssl.found()
+@@ -1408,16 +1405,15 @@
+     are_openssl_funcs_complete = true
+     foreach c : check_funcs
+       func = c.get(0)
+-      val = cc.has_function(func, args: test_c_args, dependencies: ssl_int)
+       required = c.get(1, {}).get('required', false)
+-      if required and not val
++      if required
+         are_openssl_funcs_complete = false
+         if openssl_required
+           error('openssl function @0@ is required'.format(func))
+         endif
+         break
+       elif not required
+-        cdata.set('HAVE_' + func.to_upper(), val ? 1 : false)
++        cdata.set('HAVE_' + func.to_upper(), 1)
+       endif
+     endforeach
+ 
+@@ -1480,12 +1476,6 @@
+     error('unknown uuid build option value: @0@'.format(uuidopt))
+   endif
+ 
+-  if not cc.has_header_symbol(uuidheader, uuidfunc,
+-                              args: test_c_args,
+-                              include_directories: postgres_inc,
+-                              dependencies: uuid)
+-    error('uuid library @0@ missing required function @1@'.format(uuidopt, uuidfunc))
+-  endif
+   cdata.set('HAVE_@0@'.format(uuidheader.underscorify().to_upper()), 1)
+ 
+   cdata.set('HAVE_UUID_@0@'.format(uuidname), 1,

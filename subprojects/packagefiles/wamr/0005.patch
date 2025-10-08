@@ -1,0 +1,40 @@
+From 89ea88ff5754666322ae79b52abc83b9d9592dff Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Wed, 8 Oct 2025 10:48:59 +0800
+Subject: [PATCH 1/1] Build LLVM during setup
+
+---
+ build-scripts/config_common.cmake | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/build-scripts/config_common.cmake b/build-scripts/config_common.cmake
+index 8cdce4a0..e86ec257 100644
+--- a/build-scripts/config_common.cmake
++++ b/build-scripts/config_common.cmake
+@@ -103,7 +103,23 @@ if (WAMR_BUILD_JIT EQUAL 1)
+     set (LLVM_SRC_ROOT "${WAMR_ROOT_DIR}/core/deps/llvm")
+     set (LLVM_BUILD_ROOT "${LLVM_SRC_ROOT}/build")
+     if (NOT EXISTS "${LLVM_BUILD_ROOT}")
+-        message (FATAL_ERROR "Cannot find LLVM dir: ${LLVM_BUILD_ROOT}")
++      message(STATUS "LLVM build directory not found, attempting to build LLVM...")
++      if (DEFINED LLVM_CMAKE_FLAGS)
++        execute_process(
++          COMMAND python3 ${WAMR_ROOT_DIR}/build-scripts/build_llvm.py --extra-cmake-flags ${LLVM_CMAKE_FLAGS}
++          WORKING_DIRECTORY ${WAMR_ROOT_DIR}
++          RESULT_VARIABLE result
++        )
++      else()
++        execute_process(
++          COMMAND python3 ${WAMR_ROOT_DIR}/build-scripts/build_llvm.py
++          WORKING_DIRECTORY ${WAMR_ROOT_DIR}
++          RESULT_VARIABLE result
++        )
++      endif()
++      if (NOT result EQUAL 0)
++        message(FATAL_ERROR "Failed to build LLVM")
++      endif()
+     endif ()
+     set (CMAKE_PREFIX_PATH "${LLVM_BUILD_ROOT};${CMAKE_PREFIX_PATH}")
+     set (LLVM_DIR ${LLVM_BUILD_ROOT}/lib/cmake/llvm)
+-- 
+2.51.0
