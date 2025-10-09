@@ -135,6 +135,7 @@ executable('rustica-engine',
     objects: [
         postgres_pure_lib.extract_all_objects(recursive: false),
         uncommon_shared_lib.extract_all_objects(recursive: false),
+        pg.get_variable('uuid_ossp').extract_all_objects(recursive: false),
     ],
     include_directories: 'src',
     link_args: pg.get_variable('backend_link_args') + (
@@ -144,7 +145,7 @@ executable('rustica-engine',
     link_depends: pg.get_variable('backend_link_depends'),
     export_dynamic: true,
     implib: 'postgres',
-    dependencies: backend_build_deps + [vmlib],
+    dependencies: backend_build_deps + [vmlib, pg.get_variable('uuid')],
     kwargs: pg.get_variable('default_bin_args'),
     c_args: wamr.get_cmake_definitions('-DWASM'),
 )
