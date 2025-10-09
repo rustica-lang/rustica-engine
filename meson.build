@@ -30,6 +30,7 @@ endif
 pg = subproject(
     'postgresql',
     default_options: [
+        'prefix=postgres',
         'docs=disabled',      # we don't need docs
         'readline=disabled',  # for psql
         'zlib=disabled',      # for pgdump/pgrestore
@@ -40,6 +41,9 @@ pg = subproject(
         'gssapi=disabled',    # for GSSAPI auth
         'ldap=disabled',      # for LDAP lookup
         'zstd=disabled',      # for WAL compression
+        'plperl=disabled',
+        'plpython=disabled',
+        'pltcl=disabled',
         'uuid=e2fs',
     ],
 )
@@ -121,17 +125,24 @@ uncommon_shared_lib = shared_library('uncommon_shared',
     wamr.get_cmake_variable('UNCOMMON_SHARED_SOURCE'),
     dependencies: [vmlib],
     c_args: ['-DBH_MALLOC=palloc', '-DBH_FREE=pfree'],
+    build_by_default: false,
+    install: false,
 )
 
-# Build the rustica-engine executable
+# Build the Rustica Engine
+
+rustica_shared = files(
+    'src/rustica/env.c',
+)
+rustica_deps = [vmlib, pg.get_variable('uuid')]
+rustica_cargs = wamr.get_cmake_definitions('-DWASM')
 
 executable('rustica-engine',
     [
         'src/rustica/main.c',
-        'src/rustica/env.c',
         'src/rustica/moontest.c',
     ],
-    sources: pg.get_variable('post_export_backend_sources'),
+    sources: rustica_shared + pg.get_variable('post_export_backend_sources'),
     objects: [
         postgres_pure_lib.extract_all_objects(recursive: false),
         uncommon_shared_lib.extract_all_objects(recursive: false),
@@ -145,7 +156,27 @@ executable('rustica-engine',
     link_depends: pg.get_variable('backend_link_depends'),
     export_dynamic: true,
     implib: 'postgres',
-    dependencies: backend_build_deps + [vmlib, pg.get_variable('uuid')],
+    dependencies: backend_build_deps + rustica_deps,
     kwargs: pg.get_variable('default_bin_args'),
-    c_args: wamr.get_cmake_definitions('-DWASM'),
+    c_args: rustica_cargs,
+    install_tag: 'standalone',
+)
+
+pg_mod_args = pg.get_variable('pg_mod_args')
+shared_module(
+    'rustica-engine',
+    'src/rustica/extension.c',
+    sources: rustica_shared,
+    include_directories: 'src',
+    c_args: rustica_cargs,
+    install_tag: 'extension',
+    kwargs: pg_mod_args + {
+        'dependencies': rustica_deps + [pg_mod_args['dependencies']],
+    },
+)
+install_data(
+    'rustica-engine.control',
+    'sql/rustica-engine--1.0.sql',
+    install_tag: 'extension',
+    kwargs: pg.get_variable('contrib_data_args'),
 )
