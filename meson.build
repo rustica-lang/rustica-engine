@@ -76,6 +76,13 @@ postgres_pure_lib = static_library('postgres_lib',
 
 # Include WAMR subproject
 
+cc = meson.get_compiler('c')
+wamr_c_flags = ['-Wno-incompatible-pointer-types']
+# https://github.com/bytecodealliance/wasm-micro-runtime/issues/4640
+if cc.has_argument('-fzero-init-padding-bits=unions')
+  wamr_c_flags += ['-fzero-init-padding-bits=unions']
+endif
+
 cmake = import('cmake')
 wamr_var = cmake.subproject_options()
 wamr_var.add_cmake_defines({
@@ -91,8 +98,7 @@ wamr_var.add_cmake_defines({
     'WAMR_BUILD_EXCE_HANDLING': 1,
     'WAMR_BUILD_JIT': 1,
 
-    # https://github.com/bytecodealliance/wasm-micro-runtime/issues/4640
-    'CMAKE_C_FLAGS': '-fzero-init-padding-bits=unions -Wno-incompatible-pointer-types',
+    'CMAKE_C_FLAGS': ' '.join(wamr_c_flags),
     'WAMR_BH_VPRINTF': 'pg_log_vprintf',
     'WAMR_BH_LOG': 'pg_bh_log',
 })
