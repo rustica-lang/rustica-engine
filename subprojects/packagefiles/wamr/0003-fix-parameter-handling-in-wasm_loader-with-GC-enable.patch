@@ -1,0 +1,60 @@
+From f7927a107c166dc2e80bda1490af9f4f912b8a72 Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Thu, 29 Aug 2024 12:44:27 +0800
+Subject: [PATCH 3/3] fix parameter handling in wasm_loader with GC enabled
+
+---
+ core/iwasm/interpreter/wasm_loader.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/core/iwasm/interpreter/wasm_loader.c b/core/iwasm/interpreter/wasm_loader.c
+index 0891598d..f62103a4 100644
+--- a/core/iwasm/interpreter/wasm_loader.c
++++ b/core/iwasm/interpreter/wasm_loader.c
+@@ -11093,6 +11093,9 @@ re_scan:
+                 if (BLOCK_HAS_PARAM(block_type)) {
+                     WASMFuncType *wasm_type = block_type.u.type;
+ 
++#if WASM_ENABLE_GC != 0
++                    uint32 j = 1;
++#endif
+                     BranchBlock *cur_block = loader_ctx->frame_csp - 1;
+ #if WASM_ENABLE_FAST_INTERP != 0
+                     uint32 cell_num;
+@@ -11100,6 +11103,7 @@ re_scan:
+ #endif
+                     for (i = 0; i < block_type.u.type->param_count; i++) {
+ 
++                        uint32 param_idx = wasm_type->param_count - i - 1;
+                         int32 available_stack_cell =
+                             (int32)(loader_ctx->stack_cell_num
+                                     - cur_block->stack_cell_num);
+@@ -11111,13 +11115,23 @@ re_scan:
+                             break;
+                         }
+ 
++#if WASM_ENABLE_GC != 0
++                        if (wasm_is_type_multi_byte_type(wasm_type->types[param_idx])) {
++                            WASMRefType *ref_type =
++                                (wasm_type->result_ref_type_maps - j)->ref_type;
++                            bh_memcpy_s(&wasm_ref_type,
++                                        (uint32)sizeof(WASMRefType), ref_type,
++                                        wasm_reftype_struct_size(ref_type));
++                            j++;
++                        }
++#endif
+                         POP_TYPE(
+-                            wasm_type->types[wasm_type->param_count - i - 1]);
++                            wasm_type->types[param_idx]);
+ #if WASM_ENABLE_FAST_INTERP != 0
+                         /* decrease the frame_offset pointer accordingly to keep
+                          * consistent with frame_ref stack */
+                         cell_num = wasm_value_type_cell_num(
+-                            wasm_type->types[wasm_type->param_count - i - 1]);
++                            wasm_type->types[param_idx]);
+                         loader_ctx->frame_offset -= cell_num;
+ #endif
+                     }
+-- 
+2.45.2
+

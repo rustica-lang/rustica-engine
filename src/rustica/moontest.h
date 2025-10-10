@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025 燕几（北京）科技有限公司
+// SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
+
 #ifndef RUSTICA_MOONTEST_H
 #define RUSTICA_MOONTEST_H
 

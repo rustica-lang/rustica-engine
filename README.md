@@ -1,175 +1,87 @@
-# Rustica Engine
+# <img src="docs/logo.svg" height="48px" align="right">  Rustica Engine - Postgres as an API Server!
 
-Rustica Engine 是一个将 WebAssembly 运行时 (WAMR) 与 PostgreSQL 后端集成的工具，允许在 PostgreSQL 环境中执行 WebAssembly 模块。
+[![中文](https://img.shields.io/badge/Zh-中文-informational?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAQCAYAAAAWGF8bAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAFKADAAQAAAABAAAAEAAAAABHXVY9AAABc0lEQVQ4EaWSOy8EURTHd+wDEY94JVtgg9BI1B6dQqHiE1CrRasT30DpC2hVQimiFkJWVsSj2U1EsmQH4/ff3CO3WDuDk/zmf8/jnntm7qRSMRZFUQ4WYSimNFmaRlsgq8F83K6WuALyva4mixbc+kfJcGqa7CqU4AjaocNpG5oHsx7qB3EqQRC8K4g/gazAMbFTBdbgL1Zh0w2EbnMVHdMrd4LZNotZmIZJKMAemC2z0MS6oDlYhzOQ6c3yGR5Fec4OGPvEHCmn3np+kfyT51+QH8afcbFLTfjgFVS9tZrpwC4v1k9M39w3NTQrBxSM4127SAmNoBt0Ma3QyHRwGUIYdQUh0+c0wZsLPKKH8AwvoHgNlmABZLtwBdqnP0DD9IEG2If6N0oz5SbYSfW4PYhvgNmUxU1JZGEEAsUyjPmB7lhBA1Xe7NMWpuzXa39fnC7lN1b/mZttSNLQv9XXZs2US9LwzjU5R+/d+n/CBx9I2uELeXrRajeDqHwAAAAASUVORK5CYII=)](README.zh.md)
+[![license](https://img.shields.io/badge/license-Apache--2.0-success?logo=opensourceinitiative&logoColor=white)](https://www.apache.org/licenses/LICENSE-2.0)
+[![license](https://img.shields.io/badge/license-MulanPSL--2.0-success?logo=opensourceinitiative&logoColor=white)](https://license.coscl.org.cn/MulanPSL2)
 
-## 功能特性
 
-- 基于 WAMR (WebAssembly Micro Runtime) 2.4.2
-- 集成 PostgreSQL 17.6 后端
-- 支持 WebAssembly GC (垃圾回收)
-- 支持自定义原生函数绑定
-- 支持调试功能（调用栈转储、自定义名称段等）
+Rustica Engine is a PostgreSQL extension that allows you to run WebAssembly
+modules in the database securely, turning your database into an API server.
 
-## 系统要求
+This project is a work in progress and not ready for production use.
 
-### 依赖项
 
-#### 构建工具
-- **Meson** >= 1.9.0
-- **Ninja** (构建后端)
-- **uv** (Python 包管理器)
-- **CMake** (用于构建 WAMR)
+## Features
 
-#### PostgreSQL 依赖
-- **开发库和头文件**：
-  - `libreadline-dev` (命令行编辑)
-  - `zlib1g-dev` (压缩支持)
-  - `libssl-dev` (SSL/TLS 支持)
-  - `libxml2-dev` (XML 支持，可选)
-  - `libxslt1-dev` (XSLT 支持，可选)
-  - `liblz4-dev` (LZ4 压缩，可选)
-  - `libzstd-dev` (Zstandard 压缩，可选)
-  - `libpam0g-dev` (PAM 认证，可选)
-  - `libldap2-dev` (LDAP 支持，可选)
-  - `libsystemd-dev` (systemd 集成，可选)
-  - `libicu-dev` (国际化支持)
-  - `libedit-dev` (命令行编辑，readline 的替代)
+* **Fast**: AoT-compiled WASM (by WAMR/LLVM) and prepared queries
+* **Secure**: strictly sandboxed in bgworker processes
+* **Native**: PostgreSQL types/Datums directly in the guest
+* **Zero-Copy**: operate on network buffers and database pages
 
-#### UUID 支持
-- **e2fsprogs** (`uuid-dev` 或 `e2fsprogs-devel`)
-  - 项目配置为使用 e2fs 的 UUID 实现而非 ossp-uuid
+Rustica Engine does not use WASI or Component Model, but defines a custom
+set of FFIs at a finer granularity, providing optimized bindings for various
+PostgreSQL data types and functions.
 
-#### 编译器
-- GCC 或 Clang (支持 C11 标准)
+Currently, the following programming languages can generate WebAssembly
+modules suitable for the Rustica Engine:
 
-### 在 Ubuntu/Debian 上安装依赖
+* Rustica (using MoonGRES backend)
+* MoonBit (via MoonGRES extension)
 
-```bash
-# 安装基础构建工具
-sudo apt-get update
-sudo apt-get install -y build-essential cmake ninja-build
+Rustica Engine is also packaged as a standalone command-line application,
+statically linked with PostgreSQL backend code, which can run the same
+WebAssembly programs without starting a database server.
+This is particularly useful for debugging and testing.
 
-# 安装 PostgreSQL 依赖
-sudo apt-get install -y \
-    libreadline-dev \
-    zlib1g-dev \
-    libssl-dev \
-    libicu-dev \
-    libedit-dev \
-    uuid-dev
 
-# 安装可选的 PostgreSQL 依赖
-sudo apt-get install -y \
-    libxml2-dev \
-    libxslt1-dev \
-    liblz4-dev \
-    libzstd-dev \
-    libpam0g-dev \
-    libldap2-dev \
-    libsystemd-dev
+## Development
 
-# 安装 uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+This project is configured with a modified Meson, built by uv, and uses Ninja
+as the build system. The `Makefile` provides some convenient command wrappers.
 
-### 在 Arch Linux 上安装依赖
+* Install system dependencies (Arch Linux)
 
-```bash
-# 安装基础构建工具
-sudo pacman -S base-devel cmake ninja
+    ```
+    $ sudo pacman -S make gcc ninja uv llvm18 bison flex
+    ```
 
-# 安装 PostgreSQL 依赖
-sudo pacman -S \
-    readline \
-    zlib \
-    openssl \
-    icu \
-    libedit \
-    e2fsprogs
+* Build extension and run the dev Postgres:
 
-# 安装可选的 PostgreSQL 依赖
-sudo pacman -S \
-    libxml2 \
-    libxslt \
-    lz4 \
-    zstd \
-    pam \
-    libldap \
-    systemd-libs
+    ```
+    $ make
+    $ make run
+    ```
 
-# 安装 Python 和 uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
 
-## 构建
+## Testing
 
-1. 克隆仓库：
-```bash
-git clone https://github.com/yourusername/rustica-engine.git
-cd rustica-engine
-```
+1. Install MoonGRES:
 
-2. 使用 uv 设置 Python 环境：
-```bash
-uv sync
-```
+    ```
+    $ curl ...TBD... | sh
+    ```
 
-3. 配置构建：
-```bash
-uv run meson.py setup build
-```
+2. Replace the `rustica-engine` bundled with MoonGRES with the one freshly built:
 
-4. 编译 rustica-engine：
-```bash
-ninja -C build rustica-engine
-```
+    ```
+    $ ln -sf $(pwd)/install/bin/rustica-engine ~/.moon/bin/rustica-engine
+    ```
 
-## 使用方法
+3. Run MoonBit core test suite:
 
-运行 WebAssembly 文件：
-```bash
-./build/rustica-engine run <wasm_file_path>
-```
+    ```
+    $ cd ~/.moon/lib/core && moon test --target moongres
+    ```
 
-查看帮助信息：
-```bash
-./build/rustica-engine --help
-```
 
-查看版本信息：
-```bash
-./build/rustica-engine --version
-```
+## License
 
-## 示例
+This project is dual-licensed under:
 
-```bash
-# 运行一个 WebAssembly 模块
-./build/rustica-engine run example.wasm
+* Apache License, Version 2.0
+* Mulan Permissive Software License, Version 2
 
-# 查看版本
-./build/rustica-engine -V
-# 输出: rustica-engine (PostgreSQL 17.6, WAMR 2.4.2)
-```
+You may choose either license to use this project freely, provided
+that you comply with the terms of the chosen license.
 
-## 项目结构
-
-- `main.c` - 主程序入口，包含 WAMR 运行时初始化和 WebAssembly 模块加载逻辑
-- `meson.build` - Meson 构建配置文件
-- `meson.py` - 扩展 Meson 功能，如获取 cmake 的变量
-- `pyproject.toml` - Python 项目配置
-- `subprojects/` - 子项目依赖（PostgreSQL 和 WAMR）
-
-## 技术细节
-
-### WebAssembly 支持
-- 使用 WAMR 2.4.2 作为 WebAssembly 运行时
-- 启用了 GC（垃圾回收）支持
-- 支持扩展常量表达式
-- 支持自定义段加载
-- 支持调用栈转储用于调试
-
-### PostgreSQL 集成
-- 基于 PostgreSQL 17.6
-- 使用 PostgreSQL 的内存管理和错误处理机制
-- 支持 PostgreSQL 的本地化功能
+`SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0`

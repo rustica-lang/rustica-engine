@@ -1,0 +1,330 @@
+From 6470f066e5298f1f23ea2be941e9262c87023cec Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Thu, 29 Aug 2024 12:21:45 +0800
+Subject: [PATCH 1/3] Support circular calls when multi-module enabled
+
+- implemented `aot_link_parent_calls` to link import functions in
+circular calls
+- invoke `aot_link_parent_calls` after submodules instantiation
+- update multi-module sample to add some circular calls cases:
+  - parent calls: `C3()` and `C4()`
+  - grandparent calls: `C5()`
+---
+ core/iwasm/aot/aot_loader.c             | 66 +++++++++++++++++++++----
+ core/iwasm/aot/aot_runtime.c            |  5 ++
+ core/iwasm/aot/aot_runtime.h            |  4 ++
+ core/iwasm/common/wasm_runtime_common.c |  8 +++
+ samples/multi-module/src/main.c         | 12 +++--
+ samples/multi-module/wasm-apps/mA.c     | 20 ++++++--
+ samples/multi-module/wasm-apps/mB.c     | 20 +++++++-
+ samples/multi-module/wasm-apps/mC.c     | 22 +++++++--
+ 8 files changed, 135 insertions(+), 22 deletions(-)
+
+diff --git a/core/iwasm/aot/aot_loader.c b/core/iwasm/aot/aot_loader.c
+index 645f68b1..0949d2b8 100644
+--- a/core/iwasm/aot/aot_loader.c
++++ b/core/iwasm/aot/aot_loader.c
+@@ -654,6 +654,47 @@ aot_loader_resolve_function(const AOTModule *module, const char *function_name,
+     }
+     return function;
+ }
++
++void
++aot_link_parent_calls(AOTModule *module, AOTModuleInstance *module_inst,
++                      AOTModuleInstance *parent)
++{
++    uint32 i;
++    void *ptr;
++    AOTImportFunc *import_func;
++    AOTModuleInstanceExtra *extra = (AOTModuleInstanceExtra *)module_inst->e;
++
++    for (i = 0; i < module->import_func_count; i++) {
++        import_func = &module->import_funcs[i];
++        if (!module_inst->func_ptrs[i]) {
++            const char *module_name = import_func->module_name;
++            const char *func_name = import_func->func_name;
++
++            // This is a lazy load of a parent call - we can only do it after
++            // instantiation, because the same module may be instantiated
++            // several times with different parents. See samples/multi-module.
++            if (strcmp(module_name, "env") == 0)
++                ptr = aot_loader_resolve_function(
++                    (AOTModule *)parent->module, func_name,
++                    (AOTFuncType *)module->types[import_func->func_type_index],
++                    NULL, 0);
++            else
++                ptr = aot_loader_resolve_function_ex(
++                    module_name, func_name,
++                    (AOTFuncType *)module->types[import_func->func_type_index],
++                    NULL, 0);
++
++            if (!ptr)
++                LOG_WARNING("warning: failed to link import function (%s, %s)",
++                            module_name, func_name);
++            else {
++                module_inst->func_ptrs[i] = ptr;
++                extra->import_func_module_insts[i] =
++                    (WASMModuleInstanceCommon *)parent;
++            }
++        }
++    }
++}
+ #endif /* end of WASM_ENABLE_MULTI_MODULE */
+ 
+ static bool
+@@ -2284,22 +2325,27 @@ load_import_funcs(const uint8 **p_buf, const uint8 *buf_end, AOTModule *module,
+         if (!linked_func) {
+             sub_module = NULL;
+             if (!wasm_runtime_is_built_in_module(module_name)) {
+-                sub_module = (AOTModule *)wasm_runtime_load_depended_module(
+-                    (WASMModuleCommon *)module, module_name, error_buf,
+-                    error_buf_size);
+-                if (!sub_module) {
+-                    LOG_ERROR("failed to load sub module: %s", error_buf);
+-                    return false;
++                // To support circular dependencies, we only load the submodule
++                // if it is not already in the loading list to avoid potential
++                // circular dependency errors returned from
++                // `wasm_runtime_load_depended_module`.
++                // See samples/multi-module.
++                if (!wasm_runtime_is_loading_module(module_name)) {
++                    sub_module = (AOTModule *)wasm_runtime_load_depended_module(
++                        (WASMModuleCommon *)module, module_name, error_buf,
++                        error_buf_size);
++                    if (!sub_module) {
++                        LOG_ERROR("failed to load sub module: %s", error_buf);
++                        return false;
++                    }
+                 }
+             }
+             if (!sub_module)
+                 linked_func = aot_loader_resolve_function_ex(
+-                    module_name, field_name, declare_func_type, error_buf,
+-                    error_buf_size);
++                    module_name, field_name, declare_func_type, NULL, 0);
+             else
+                 linked_func = aot_loader_resolve_function(
+-                    sub_module, field_name, declare_func_type, error_buf,
+-                    error_buf_size);
++                    sub_module, field_name, declare_func_type, NULL, 0);
+         }
+         import_funcs[i].func_ptr_linked = linked_func;
+         import_funcs[i].func_type = declare_func_type;
+diff --git a/core/iwasm/aot/aot_runtime.c b/core/iwasm/aot/aot_runtime.c
+index 7e8799e0..c595b60c 100644
+--- a/core/iwasm/aot/aot_runtime.c
++++ b/core/iwasm/aot/aot_runtime.c
+@@ -1169,12 +1169,17 @@ init_func_ptrs(AOTModuleInstance *module_inst, AOTModule *module,
+     func_ptrs = (void **)module_inst->func_ptrs;
+     for (i = 0; i < module->import_func_count; i++, func_ptrs++) {
+         *func_ptrs = (void *)module->import_funcs[i].func_ptr_linked;
++#if WASM_ENABLE_MULTI_MODULE == 0
++        // When multi-module is enabled, we skip checking warning for import
++        // functions that fail to link. Instead, we will link missing import
++        // functions after submodules instantiation.
+         if (!*func_ptrs) {
+             const char *module_name = module->import_funcs[i].module_name;
+             const char *field_name = module->import_funcs[i].func_name;
+             LOG_WARNING("warning: failed to link import function (%s, %s)",
+                         module_name, field_name);
+         }
++#endif
+     }
+ 
+     /* Set defined function pointers */
+diff --git a/core/iwasm/aot/aot_runtime.h b/core/iwasm/aot/aot_runtime.h
+index e3704f82..68ea5548 100644
+--- a/core/iwasm/aot/aot_runtime.h
++++ b/core/iwasm/aot/aot_runtime.h
+@@ -323,6 +323,10 @@ typedef struct AOTModule {
+ 
+ #if WASM_ENABLE_MULTI_MODULE != 0
+ #define AOTSubModInstNode WASMSubModInstNode
++
++void
++aot_link_parent_calls(AOTModule *module, AOTModuleInstance *module_inst,
++                      AOTModuleInstance *parent);
+ #endif
+ 
+ /* Target info, read from ELF header of object file */
+diff --git a/core/iwasm/common/wasm_runtime_common.c b/core/iwasm/common/wasm_runtime_common.c
+index f54ac4ab..bd6e1387 100644
+--- a/core/iwasm/common/wasm_runtime_common.c
++++ b/core/iwasm/common/wasm_runtime_common.c
+@@ -7410,7 +7410,9 @@ wasm_runtime_sub_module_instantiate(WASMModuleCommon *module,
+     WASMRegisteredModule *sub_module_list_node = NULL;
+ 
+ #if WASM_ENABLE_AOT != 0
++    bool is_aot = false;
+     if (module->module_type == Wasm_Module_AoT) {
++        is_aot = true;
+         sub_module_inst_list =
+             ((AOTModuleInstanceExtra *)((AOTModuleInstance *)module_inst)->e)
+                 ->sub_module_inst_list;
+@@ -7439,6 +7441,12 @@ wasm_runtime_sub_module_instantiate(WASMModuleCommon *module,
+                       sub_module_list_node->module_name);
+             return false;
+         }
++#if WASM_ENABLE_AOT != 0
++        if (is_aot && sub_module->module_type == Wasm_Module_AoT)
++            aot_link_parent_calls((AOTModule *)sub_module,
++                                  (AOTModuleInstance *)sub_module_inst,
++                                  (AOTModuleInstance *)module_inst);
++#endif
+         sub_module_inst_list_node = loader_malloc(sizeof(WASMSubModInstNode),
+                                                   error_buf, error_buf_size);
+         if (!sub_module_inst_list_node) {
+diff --git a/samples/multi-module/src/main.c b/samples/multi-module/src/main.c
+index 29b623da..739653d1 100644
+--- a/samples/multi-module/src/main.c
++++ b/samples/multi-module/src/main.c
+@@ -120,14 +120,18 @@ main(int argc, char *argv[])
+     wasm_application_execute_func(module_inst, "C1", 0, args);
+     printf("call \"C2\", it will call B1() of mB and return 0x15:i32, ===> ");
+     wasm_application_execute_func(module_inst, "C2", 0, args);
+-    printf("call \"C3\", it will call A1() of mA and return 0xb:i32, ===> ");
++    printf("call \"C3\", it will call A1() of mA and call X() of mC and "
++           "return 0xe:i32, ===> ");
+     wasm_application_execute_func(module_inst, "C3", 0, args);
+     printf("call \"C4\", it will call B2() of mB and call A1() of mA and "
+-           "return 0xb:i32, ===> ");
++           "call X() of mB and return 0xd:i32, ===> ");
+     wasm_application_execute_func(module_inst, "C4", 0, args);
+-    printf(
+-        "call \"C5\", it will be failed since it is a export function, ===> ");
++    printf("call \"C5\", it will call B3() of mB and call A2() of mA and "
++           "call B1() of mB and return 0x1f:i32, ===> ");
+     wasm_application_execute_func(module_inst, "C5", 0, args);
++    printf(
++        "call \"C6\", it will be failed since it is a export function, ===> ");
++    wasm_application_execute_func(module_inst, "C6", 0, args);
+ 
+     /* examine module registration a bit */
+     module1 = wasm_runtime_find_module_registered("mC");
+diff --git a/samples/multi-module/wasm-apps/mA.c b/samples/multi-module/wasm-apps/mA.c
+index 663ec816..850a0db8 100644
+--- a/samples/multi-module/wasm-apps/mA.c
++++ b/samples/multi-module/wasm-apps/mA.c
+@@ -1,13 +1,27 @@
++__attribute__((import_module("env")))
++__attribute__((import_name("X"))) extern int
++X();
++
++__attribute__((import_module("mB")))
++__attribute__((import_name("B1"))) extern int
++B1();
++
+ __attribute__((export_name("A1"))) int
+ A1()
+ {
+-    return 11;
++    return X() + 11;
+ }
+ 
+-int
++__attribute__((export_name("A2"))) int
+ A2()
++{
++    return B1() + 10;
++}
++
++int
++A3()
+ {
+     return 12;
+ }
+ 
+-/* mA is a  reactor. it doesn't need a main() */
+\ No newline at end of file
++/* mA is a  reactor. it doesn't need a main() */
+diff --git a/samples/multi-module/wasm-apps/mB.c b/samples/multi-module/wasm-apps/mB.c
+index a912d1d7..dd277d6f 100644
+--- a/samples/multi-module/wasm-apps/mB.c
++++ b/samples/multi-module/wasm-apps/mB.c
+@@ -2,6 +2,16 @@ __attribute__((import_module("mA")))
+ __attribute__((import_name("A1"))) extern int
+ A1();
+ 
++__attribute__((import_module("mA")))
++__attribute__((import_name("A2"))) extern int
++A2();
++
++__attribute__((export_name("X"))) int
++X()
++{
++    return 2;
++}
++
+ __attribute__((export_name("B1"))) int
+ B1()
+ {
+@@ -14,10 +24,16 @@ B2()
+     return A1();
+ }
+ 
+-int
++__attribute__((export_name("B3"))) int
+ B3()
++{
++    return A2();
++}
++
++int
++B4()
+ {
+     return 23;
+ }
+ 
+-/* mA is a  reactor. it doesn't need a main() */
+\ No newline at end of file
++/* mB is a  reactor. it doesn't need a main() */
+diff --git a/samples/multi-module/wasm-apps/mC.c b/samples/multi-module/wasm-apps/mC.c
+index 8b19a5b6..4a3d5e85 100644
+--- a/samples/multi-module/wasm-apps/mC.c
++++ b/samples/multi-module/wasm-apps/mC.c
+@@ -13,6 +13,16 @@ __attribute__((import_module("mB")))
+ __attribute__((import_name("B2"))) extern int
+ B2();
+ 
++__attribute__((import_module("mB")))
++__attribute__((import_name("B3"))) extern int
++B3();
++
++__attribute__((export_name("X"))) int
++X()
++{
++    return 3;
++}
++
+ __attribute__((export_name("C1"))) int
+ C1()
+ {
+@@ -37,8 +47,14 @@ C4()
+     return B2();
+ }
+ 
+-int
++__attribute__((export_name("C5"))) int
+ C5()
++{
++    return B3();
++}
++
++int
++C6()
+ {
+     return C1() + C2() + C3() + 35;
+ }
+@@ -46,6 +62,6 @@ C5()
+ int
+ main()
+ {
+-    printf("%u\n", C5());
++    printf("%u\n", C6());
+     return EXIT_SUCCESS;
+-}
+\ No newline at end of file
++}
+-- 
+2.45.2
+
