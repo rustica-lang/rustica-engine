@@ -5,7 +5,9 @@ DEV_LLVM_DIR = /usr/lib/llvm18
 
 # Default target: build for development
 .PHONY: build
-build: $(BUILD_DIR)/install
+build:
+	touch $(BUILD_DIR)/build/.stamp
+	$(MAKE) $(BUILD_DIR)/install/.stamp
 
 $(BUILD_DIR)/build/.stamp:
 	uv run meson.py setup $(BUILD_DIR)/build --prefix=/ -Dllvm_dir=$(DEV_LLVM_DIR)

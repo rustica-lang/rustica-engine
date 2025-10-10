@@ -270,6 +270,9 @@ uncommon_shared_lib = shared_library('uncommon_shared',
 
 rustica_shared = files(
     'src/rustica/env.c',
+    'src/rustica/datatypes.c',
+    'src/rustica/adt/text.c',
+    'src/rustica/adt/stringbuilder.c',
 )
 rustica_deps = [vmlib, pg.get_variable('uuid')]
 rustica_cargs = wamr.get_cmake_definitions('-DWASM')

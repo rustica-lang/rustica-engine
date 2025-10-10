@@ -3,5 +3,9 @@ directory = wasm-micro-runtime-WAMR-2.4.2
 source_url = https://github.com/bytecodealliance/wasm-micro-runtime/archive/refs/tags/WAMR-2.4.2.tar.gz
 source_filename = wamr-2.4.2.tar.gz
 source_hash = 73380561a01f4863506e855c2c265cf03c5b6efb17bbb8c9bbafe80745fd00ef
-diff_files = wamr/0001.patch, wamr/0002.patch, wamr/0004.patch
 method = cmake
+diff_files =
+    wamr/0001.patch,
+    wamr/0002.patch,
+    wamr/0004.patch,
+    wamr/0005-Support-custom-global-resolver.patch

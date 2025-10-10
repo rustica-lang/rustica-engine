@@ -11,6 +11,7 @@
 #include "gc_export.h"
 #include "aot_export.h"
 
+#include "rustica/datatypes.h"
 #include "rustica/env.h"
 #include "rustica/moontest.h"
 
@@ -208,6 +209,8 @@ init_wamr() {
         ereport(ERROR, errmsg("Failed to initialize WASM runtime"));
 
     rustica_register_natives();
+    rst_register_natives_text();
+    rst_register_natives_stringbuilder();
 }
 
 static inline uint8_t *

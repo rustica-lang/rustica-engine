@@ -127,4 +127,8 @@ rst_register_natives_uuid();
 void
 rst_init_context_for_jsonb(wasm_exec_env_t exec_env);
 
+void
+wasm_runtime_remove_local_obj_ref(wasm_exec_env_t exec_env,
+                                  wasm_local_obj_ref_t *me);
+
 #endif /* RUSTICA_DATATYPES_H */

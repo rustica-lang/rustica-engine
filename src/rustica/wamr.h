@@ -51,10 +51,6 @@ wasm_ref_type_repr(CommonHeapTypes *heap_types, wasm_ref_type_t ref_type);
 void
 wasm_runtime_unregister_and_unload(wasm_module_t module);
 
-void
-wasm_runtime_remove_local_obj_ref(wasm_exec_env_t exec_env,
-                                  wasm_local_obj_ref_t *me);
-
 int32_t
 env_ereport(wasm_exec_env_t exec_env, int32_t level, wasm_obj_t ref);
 

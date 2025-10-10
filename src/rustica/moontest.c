@@ -9,6 +9,7 @@
 #include "utils/json.h"
 
 #include "rustica/env.h"
+#include "rustica/datatypes.h"
 #include "rustica/moontest.h"
 
 extern const char *progname;
@@ -179,8 +180,7 @@ static JsonParseErrorType
 json_object_end_cb(void *state) {
     JsonParseState *parse_state = state;
     wasm_function_inst_t func;
-    rustica_value_t filename = NULL;
-    uintptr_t filename_ref = 0;
+    wasm_externref_obj_t filename = NULL;
     StringInfo filename_buf = NULL, msg = NULL, escaped_msg = NULL;
     const char *exc;
 
@@ -194,19 +194,15 @@ json_object_end_cb(void *state) {
             for (int i = parse_state->range_start; i < parse_state->range_end;
                  i++) {
                 wasm_val_t args[2];
+
                 if (!filename) {
                     Assert(parse_state->filename != NULL);
-                    filename = rustica_value_new(RUSTICA_ENV_CSTRING,
-                                                 parse_state->filename,
-                                                 0);
+                    filename = cstring_into_varatt_obj(parse_state->exec_env,
+                        parse_state->filename, strlen(parse_state->filename), TEXTOID);
                 }
-                if (!filename_ref)
-                    filename_ref =
-                        (uintptr_t)rustica_value_to_wasm(parse_state->exec_env,
-                                                         filename);
 
                 args[0].kind = WASM_EXTERNREF;
-                args[0].of.foreign = filename_ref;
+                args[0].of.foreign = (uintptr_t)filename;
                 args[1].kind = WASM_I32;
                 args[1].of.i32 = i;
 
@@ -218,7 +214,7 @@ json_object_end_cb(void *state) {
                                               args)) {
                     if (!filename_buf) {
                         filename_buf = makeStringInfo();
-                        escape_json(filename_buf, filename->ptr);
+                        escape_json(filename_buf, parse_state->filename);
                     }
                     if (msg) {
                         resetStringInfo(msg);

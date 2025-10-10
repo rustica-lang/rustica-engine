@@ -195,3 +195,20 @@ cstring_into_varatt_obj(wasm_exec_env_t exec_env,
     memcpy(VARDATA_ANY(obj->body.ptr), data, len);
     return rst_externref_of_obj(exec_env, obj);
 }
+
+void
+wasm_runtime_remove_local_obj_ref(wasm_exec_env_t exec_env,
+                                  wasm_local_obj_ref_t *me) {
+    wasm_local_obj_ref_t *current =
+        wasm_runtime_get_cur_local_obj_ref(exec_env);
+    if (current == me)
+        wasm_runtime_pop_local_obj_ref(exec_env);
+    else {
+        wasm_local_obj_ref_t *next;
+        while (current != me) {
+            next = current;
+            current = current->prev;
+        }
+        next->prev = me->prev;
+    }
+}
