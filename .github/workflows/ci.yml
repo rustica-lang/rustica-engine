@@ -2,28 +2,72 @@ name: CI
 
 on:
   push:
-    branches: [ master, ci ]
+    branches: [ master ]
 
   pull_request:
     branches: [ master ]
 
 jobs:
 
+  setup-standalone:
+    runs-on: ubuntu-22.04
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Cache setup artifacts
+        uses: actions/cache@v4
+        id: cache-standalone
+        with:
+          key: standalone-setup-${{ runner.os }}-${{ hashFiles('meson*', 'subprojects/*.wrap') }}
+          restore-keys: standalone-setup-${{ runner.os }}-
+          path: |
+            ./subprojects/packagecache
+            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/bin
+            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/include
+            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/lib
+            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/libexec
+            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/share
+
+      - name: Setup ccache
+        if: steps.cache-standalone.outputs.cache-hit != 'true'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ccache-llvm-${{ runner.os }}
+
+      - name: Setup standalone build
+        if: steps.cache-standalone.outputs.cache-hit != 'true'
+        run: |
+          uv venv
+          uv run meson.py setup build --prefix=/ -Dembed_libs=true --buildtype=release
+
   build-standalone:
     runs-on: ubuntu-22.04
+    needs: setup-standalone
 
     steps:
 
     - uses: actions/checkout@v4
 
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ccache-standalone-${{ runner.os }}
+
     - name: Install uv
       uses: astral-sh/setup-uv@v7
 
-    - uses: actions/cache@v4
+    - name: Retrieve setup artifacts
+      uses: actions/cache@v4
       id: cache-standalone
       with:
         key: standalone-setup-${{ runner.os }}-${{ hashFiles('meson*', 'subprojects/*.wrap') }}
         restore-keys: standalone-setup-${{ runner.os }}-
+        fail-on-cache-miss: true
         path: |
           ./subprojects/packagecache
           ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/bin
@@ -32,27 +76,17 @@ jobs:
           ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/libexec
           ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/share
 
-    - name: Install LLVM build dependencies
-      id: ccache-setup
-      if: steps.cache-standalone.outputs.cache-hit != 'true'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ccache
-        echo "ccache_dir=$(ccache --get-config=cache_dir)" >> $GITHUB_OUTPUT
-
-    - uses: actions/cache@v4
-      if: steps.cache-standalone.outputs.cache-hit != 'true'
-      with:
-        key: llvm-ccache-${{ runner.os }}-${{ hashFiles('meson*', 'subprojects/*.wrap') }}
-        restore-keys: llvm-ccache-${{ runner.os }}-
-        path: ${{ steps.ccache-setup.outputs.ccache_dir }}
-
     - name: Build standalone
       run: |
+        mv subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build subprojects/llvm
+        rm -rf subprojects/wasm-micro-runtime-WAMR-*
         uv venv
-        make standalone
+        uv run meson.py setup build --prefix=/ -Dllvm_dir=subprojects/llvm/lib/cmake/llvm -Dembed_libs=true --buildtype=release
+        uv run meson.py install -C build --destdir=dist --skip-subprojects --tags standalone
+        strip dist/bin/rustica-engine
 
     - uses: actions/upload-artifact@v4
       with:
         name: standalone
-        path: dist
+        path: dist/bin/rustica-engine
+
