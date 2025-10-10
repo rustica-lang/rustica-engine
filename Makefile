@@ -28,8 +28,6 @@ standalone: $(DIST_DIR)/usr/bin/rustica-engine
 
 $(DIST_DIR)/usr/bin/rustica-engine:
 	uv run meson.py setup $(BUILD_DIR) --prefix=/usr -Dembed_libs=true --buildtype=release
-	uv run meson.py install -C $(BUILD_DIR) --destdir=$(DIST_DIR) --skip-subprojects --tags standalone
-	strip $(DIST_DIR)/usr/bin/rustica-engine
 
 # Build PostgreSQL extension with LLVM embedded statically for production use
 .PHONY: extension
