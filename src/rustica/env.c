@@ -20,27 +20,19 @@ static void
 obj_finalizer(const wasm_obj_t obj, void *data) {
     rustica_value_t val =
         (rustica_value_t)wasm_anyref_obj_get_value((wasm_anyref_obj_t)obj);
-    if (val->owns_ptr)
-        pfree(val->ptr);
     pfree(val);
 }
 
 rustica_value_t
 rustica_value_new(const uint8_t type, void *ptr, const size_t size) {
-    const rustica_value_t rv =
-        palloc(sizeof(RusticaValue)
-               + (size > sizeof(void *) ? size - sizeof(void *) : 0));
+    const rustica_value_t rv = palloc0(sizeof(RusticaValue) + size);
     rv->type = type;
-    rv->owns_ptr = false;
     if (size == 0) {
         rv->ptr = ptr;
-        rv->data_builtin = false;
     }
     else {
-        rv->data_builtin = true;
-        if (ptr == NULL)
-            memset(rv->data, 0, size);
-        else
+        rv->data = rv->vardata;
+        if (ptr != NULL)
             memcpy(rv->data, ptr, size);
     }
     return rv;
@@ -93,14 +85,8 @@ fs_begin_read_string(wasm_exec_env_t exec_env, wasm_obj_t ref) {
     rustica_value_t val = rustica_value_from_wasm(ref, RUSTICA_ENV_CSTRING);
     StringReader *buf = palloc(sizeof(StringReader));
     buf->offset = 0;
-    if (val->data_builtin) {
-        buf->size = strlen(val->data);
-        buf->data = val->data;
-    }
-    else {
-        buf->size = strlen(val->ptr);
-        buf->data = val->ptr;
-    }
+    buf->size = strlen(val->data);
+    buf->data = val->data;
     return buf;
 }
 
@@ -138,10 +124,7 @@ fs_begin_read_string_array(wasm_exec_env_t exec_env, wasm_obj_t ref) {
         rustica_value_from_wasm(ref, RUSTICA_ENV_CSTRING_ARRAY);
     ArrayReader *reader = palloc(sizeof(ArrayReader));
     reader->offset = 0;
-    if (val->data_builtin)
-        reader->arr = val->arr;
-    else
-        reader->arr = val->ptr;
+    reader->arr = val->arr;
     return reader;
 }
 

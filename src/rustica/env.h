@@ -21,14 +21,13 @@ typedef struct RusticaPointerArray {
 
 typedef struct RusticaValue {
     uint8_t type;
-    bool data_builtin;
-    bool owns_ptr;
     union {
         void *ptr;
-        char data[];
-        RusticaPointerArray arr[];
-        instr_time instr_time[];
+        char *data;
+        RusticaPointerArray *arr;
+        instr_time *instr_time;
     };
+    char vardata[];
 } RusticaValue;
 
 typedef RusticaValue *rustica_value_t;
