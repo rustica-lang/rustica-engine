@@ -27,11 +27,11 @@ jobs:
           restore-keys: standalone-setup-${{ runner.os }}-
           path: |
             ./subprojects/packagecache
-            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/bin
-            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/include
-            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/lib
-            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/libexec
-            ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/share
+            ./subprojects/llvm/build/bin
+            ./subprojects/llvm/build/include
+            ./subprojects/llvm/build/lib
+            ./subprojects/llvm/build/libexec
+            ./subprojects/llvm/build/share
 
       - name: Setup ccache
         if: steps.cache-standalone.outputs.cache-hit != 'true'
@@ -70,20 +70,16 @@ jobs:
         fail-on-cache-miss: true
         path: |
           ./subprojects/packagecache
-          ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/bin
-          ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/include
-          ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/lib
-          ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/libexec
-          ./subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build/share
+          ./subprojects/llvm/build/bin
+          ./subprojects/llvm/build/include
+          ./subprojects/llvm/build/lib
+          ./subprojects/llvm/build/libexec
+          ./subprojects/llvm/build/share
 
     - name: Build standalone
       run: |
-        mv subprojects/wasm-micro-runtime-WAMR-*/core/deps/llvm/build subprojects/llvm
-        rm -rf subprojects/wasm-micro-runtime-WAMR-*
         uv venv
-        uv run meson.py setup build --prefix=/ -Dllvm_dir=subprojects/llvm/lib/cmake/llvm -Dembed_libs=true --buildtype=release
-        uv run meson.py install -C build --destdir=dist --skip-subprojects --tags standalone
-        strip dist/bin/rustica-engine
+        make standalone
 
     - uses: actions/upload-artifact@v4
       with:

@@ -101,6 +101,7 @@ wamr_var.add_cmake_defines({
     'WAMR_BUILD_EXCE_HANDLING': 1,
     'WAMR_BUILD_JIT': 1,
 
+    'DEPS_DIR': meson.project_source_root() / 'subprojects',
     'CMAKE_C_FLAGS': ' '.join(wamr_c_flags),
     'WAMR_BH_VPRINTF': 'pg_log_vprintf',
     'WAMR_BH_LOG': 'pg_bh_log',
