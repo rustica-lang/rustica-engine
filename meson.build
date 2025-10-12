@@ -7,6 +7,16 @@ project(
     default_options : []
 )
 
+fs = import('fs')
+
+if get_option('build_zlib_only')
+    subproject('zlib', default_options: ['default_library=static'])
+    subdir_done()
+elif get_option('build_llvm_only')
+    subproject('llvm', default_options: ['zlib_dir=' + get_option('zlib_dir')])
+    subdir_done()
+endif
+
 if get_option('embed_libs')
     add_project_arguments('-static-libstdc++', '-static-libgcc', language: ['c', 'cpp'])
     subproject('lz4', default_options: ['default_library=static'])
@@ -24,8 +34,6 @@ if get_option('embed_libs')
     )
     subproject('icu', default_options: ['default_library=static'])
     subproject('openssl', default_options: ['default_library=static'])
-    zlib = subproject('zlib', default_options: ['default_library=static'])
-    zlib_a = zlib.build('zlib')
 endif
 
 # Include PostgreSQL subproject
@@ -80,7 +88,8 @@ postgres_pure_lib = static_library('postgres_lib',
 # Include WAMR subproject
 
 cc = meson.get_compiler('c')
-wamr_c_flags = ['-Wno-incompatible-pointer-types']
+llvm_inc_flag = '-I' + (get_option('llvm_dir') / 'include')
+wamr_c_flags = ['-Wno-incompatible-pointer-types', llvm_inc_flag]
 # https://github.com/bytecodealliance/wasm-micro-runtime/issues/4640
 if cc.has_argument('-fzero-init-padding-bits=unions')
   wamr_c_flags += ['-fzero-init-padding-bits=unions']
@@ -101,32 +110,20 @@ wamr_var.add_cmake_defines({
     'WAMR_BUILD_EXCE_HANDLING': 1,
     'WAMR_BUILD_JIT': 1,
 
-    'DEPS_DIR': meson.project_source_root() / 'subprojects',
     'CMAKE_C_FLAGS': ' '.join(wamr_c_flags),
+    'CMAKE_CXX_FLAGS': llvm_inc_flag,
     'WAMR_BH_VPRINTF': 'pg_log_vprintf',
     'WAMR_BH_LOG': 'pg_bh_log',
+    'LLVM_DIR': get_option('llvm_dir') / 'lib/cmake/llvm',
 })
-if get_option('llvm_dir') != ''
-    wamr_var.add_cmake_defines({
-        'LLVM_DIR': get_option('llvm_dir'),
-    })
-elif get_option('embed_libs')
-    # Tell WAMR to link LLVM with our static zlib
-    wamr_defines = {
-        'LLVM_ENABLE_ZLIB:STRING': 'FORCE_ON',
-        'ZLIB_LIBRARY': zlib_a,
-        'ZLIB_INCLUDE_DIR': zlib.get_variable('depinc').to_list()[0],
-        'ZLIB_USE_STATIC_LIBS': 'ON',
-        'LLVM_ENABLE_ZSTD:STRING': 'OFF',
-    }
-    # Build LLVM with the right zlib too
-    llvm_cmake_flags = []
-    foreach k, v : wamr_defines
-        llvm_cmake_flags += ['-D' + k + '=' + v]
-    endforeach
-    wamr_var.add_cmake_defines(wamr_defines + {
-        'LLVM_CMAKE_FLAGS': ' '.join(llvm_cmake_flags),
-    })
+if get_option('zlib_dir') != ''
+    zlib_prefix = get_option('zlib_dir')
+    wamr_var.add_cmake_defines(
+        {
+            'ZLIB_LIBRARY': zlib_prefix / 'lib' / 'libz.a',
+            'ZLIB_INCLUDE_DIR': zlib_prefix / 'include',
+        }
+    )
 endif
 wamr = cmake.subproject('wamr', options: wamr_var)
 vmlib = wamr.dependency('vmlib')

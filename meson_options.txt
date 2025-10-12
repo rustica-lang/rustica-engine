@@ -10,3 +10,21 @@ option(
     value: '',
     description: 'Path to a pre-built LLVM toolchain to use for building WAMR',
 )
+option(
+    'build_llvm_only',
+    type: 'boolean',
+    value: false,
+    description: 'Only build LLVM subproject and skip the rest',
+)
+option(
+    'zlib_dir',
+    type: 'string',
+    value: '',
+    description: 'Path to a pre-installed zlib (e.g., /path/to/zlib) for building LLVM',
+)
+option(
+    'build_zlib_only',
+    type: 'boolean',
+    value: false,
+    description: 'Only build zlib subproject and skip the rest',
+)
