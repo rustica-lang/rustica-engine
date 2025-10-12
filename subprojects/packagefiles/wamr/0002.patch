@@ -1,0 +1,62 @@
+From a0999fbf49f7d89f789c809f3561817e98704728 Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Wed, 24 Sep 2025 09:14:14 +0800
+Subject: [PATCH 2/4] loader: fix block/loop ref params type checking
+
+---
+ core/iwasm/interpreter/wasm_loader.c | 29 ++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/core/iwasm/interpreter/wasm_loader.c b/core/iwasm/interpreter/wasm_loader.c
+index 3f8c68db..b86c32d9 100644
+--- a/core/iwasm/interpreter/wasm_loader.c
++++ b/core/iwasm/interpreter/wasm_loader.c
+@@ -11911,9 +11911,25 @@ re_scan:
+                     WASMFuncType *wasm_type = block_type.u.type;
+ 
+                     BranchBlock *cur_block = loader_ctx->frame_csp - 1;
++#if WASM_ENABLE_GC != 0
++                    WASMRefType *ref_type;
++                    uint32 j = 0;
++#endif
+ #if WASM_ENABLE_FAST_INTERP != 0
+                     uint32 cell_num;
+                     available_params = block_type.u.type->param_count;
++#endif
++#if WASM_ENABLE_GC != 0
++                    /* find the index of the last param
++                     * in wasm_type->ref_type_maps as j */
++                    for (i = 0; i < block_type.u.type->param_count; i++) {
++                        if (wasm_is_type_multi_byte_type(wasm_type->types[i])) {
++                            j += 1;
++                        }
++                    }
++                    if (j > 0) {
++                        j -= 1;
++                    }
+ #endif
+                     for (i = 0; i < block_type.u.type->param_count; i++) {
+ 
+@@ -11927,6 +11943,19 @@ re_scan:
+ #endif
+                             break;
+                         }
++#if WASM_ENABLE_GC != 0
++                        if (wasm_is_type_multi_byte_type(
++                                wasm_type
++                                    ->types[wasm_type->param_count - i - 1])) {
++                            bh_assert(wasm_type->ref_type_maps[j].index
++                                      == wasm_type->param_count - i - 1);
++                            ref_type = wasm_type->ref_type_maps[j].ref_type;
++                            bh_memcpy_s(&wasm_ref_type, sizeof(WASMRefType),
++                                        ref_type,
++                                        wasm_reftype_struct_size(ref_type));
++                            j--;
++                        }
++#endif
+ 
+                         POP_TYPE(
+                             wasm_type->types[wasm_type->param_count - i - 1]);
+-- 
+2.51.0
+

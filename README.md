@@ -11,80 +11,68 @@ modules in the database securely, turning your database into an API server.
 This project is a work in progress and not ready for production use.
 
 
-## Design Goals
+## Features
 
 * **Fast**: AoT-compiled WASM (by WAMR/LLVM) and prepared queries
 * **Secure**: strictly sandboxed in bgworker processes
 * **Native**: PostgreSQL types/Datums directly in the guest
 * **Zero-Copy**: operate on network buffers and database pages
 
+Rustica Engine does not use WASI or Component Model, but defines a custom
+set of FFIs at a finer granularity, providing optimized bindings for various
+PostgreSQL data types and functions.
 
-## Installation
+Currently, the following programming languages can generate WebAssembly
+modules suitable for the Rustica Engine:
 
-1. Install system dependencies (Arch Linux)
+* Rustica (using MoonGRES backend)
+* MoonBit (via MoonGRES extension)
 
-    ```
-    $ sudo pacman -S llvm postgresql
-    ```
-
-2. Build and install
-
-    ```
-    $ make
-    $ sudo make install
-    ```
+Rustica Engine is also packaged as a standalone command-line application,
+statically linked with PostgreSQL backend code, which can run the same
+WebAssembly programs without starting a database server.
+This is particularly useful for debugging and testing.
 
 
 ## Development
 
+This project is configured with a modified Meson, built by uv, and uses Ninja
+as the build system. The `Makefile` provides some convenient command wrappers.
+
 * Install system dependencies (Arch Linux)
 
     ```
-    $ sudo pacman -S llvm lldb
+    $ sudo pacman -S make gcc ninja uv llvm18 bison flex
     ```
 
 * Build extension and run the dev Postgres:
 
     ```
-    $ make run DEV=1 -j $(nproc)
-    ```
-
-* When you changed settings in Makefile, rebuild extension files:
-
-    ```
-    $ make clean DEV=1
-    ```
-
-* When you need to nuke the environment:
-
-    ```
-    $ make nuke
+    $ make
+    $ make run
     ```
 
 
 ## Testing
 
-1. Convert WASM binary to octets for step 2:
+1. Install MoonGRES:
 
     ```
-    $ xxd -p target/wasm-gc/release/build/main/main.wasm | tr -d '\n'
+    $ curl ...TBD... | sh
     ```
 
-2. Deploy the WASM application:
+2. Replace the `rustica-engine` bundled with MoonGRES with the one freshly built:
 
     ```
-    $ psql -h /tmp postgres
-    postgres=# CREATE EXTENSION "rustica-engine" CASCADE;
-    postgres=# DELETE FROM rustica.queries;
-    postgres=# DELETE FROM rustica.modules;
-    postgres=# WITH wasm AS (SELECT '\x0061736d01000000010f035e7801600364007f7f017f600000020c0103656e760473656e6400010304030102020401000503010001060100070a01065f737461727400030801020901000c01010a21030a0020002001200210000b02000b110041004133fb0900004100413310011a0b0b36010133485454502f312e3020323030204f4b0d0a436f6e74656e742d4c656e6774683a2031320d0a0d0a68656c6c6f20776f726c640a'::bytea AS code), compiled AS (SELECT rustica.compile_wasm(code) AS result FROM wasm) INSERT INTO rustica.modules SELECT 'main', code, (result).bin_code, (result).heap_types FROM wasm, compiled RETURNING name;
+    $ ln -sf $(pwd)/install/bin/rustica-engine ~/.moon/bin/rustica-engine
     ```
 
-3. Invoke the API:
+3. Run MoonBit core test suite:
 
     ```
-    $ curl localhost:8080
+    $ cd ~/.moon/lib/core && moon test --target moongres
     ```
+
 
 ## License
 

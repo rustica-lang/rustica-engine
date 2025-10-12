@@ -1,0 +1,9 @@
+[wrap-file]
+directory = llvm-project-18.1.8.src
+source_url = https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/llvm-project-18.1.8.src.tar.xz
+source_filename = llvm-project-18.1.8.src.tar.xz
+source_hash = 0b58557a6d32ceee97c8d533a59b9212d87e0fc4d2833924eb6c611247db2f2a
+diff_files =
+    llvm/0001_Add_cstdint_to_SmallVector_101761.patch,
+    llvm/0002_Add_missing_include_to_X86MCTargetDesc.h_123320.patch,
+    llvm/0003_Add_Meson_Build.patch

@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+
+  pull_request:
+    branches: [ master ]
+
+jobs:
+
+  download-subprojects:
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:22.04
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - id: downloads_cache
+        name: Cache subproject downloads
+        uses: actions/cache@v4
+        with:
+          key: subprojects-${{ hashFiles('subprojects/*.wrap') }}
+          restore-keys: subprojects-
+          path: ./subprojects/packagecache
+
+      - if: steps.downloads_cache.outputs.cache-hit != 'true'
+        name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates patch
+
+      - if: steps.downloads_cache.outputs.cache-hit != 'true'
+        name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - if: steps.downloads_cache.outputs.cache-hit != 'true'
+        name: Download subprojects
+        run: |
+          uv venv
+          uv run meson.py subprojects download
+
+  build-llvm:
+    runs-on: ubuntu-latest
+    needs: download-subprojects
+    container:
+      image: ubuntu:22.04
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - name: Cache LLVM
+        uses: actions/cache@v4
+        id: llvm_cache
+        with:
+          key: llvm-${{ runner.os }}-${{ hashFiles('subprojects/llvm.wrap', 'subprojects/packagefiles/llvm/*') }}
+          restore-keys: llvm-${{ runner.os }}-
+          path: |
+            ./build/llvm
+            ./build/zlib
+
+      - if: steps.llvm_cache.outputs.cache-hit != 'true'
+        name: Retrieve subproject downloads
+        uses: actions/cache/restore@v4
+        with:
+          key: subprojects-${{ hashFiles('subprojects/*.wrap') }}
+          fail-on-cache-miss: true
+          path: ./subprojects/packagecache
+
+      - if: steps.llvm_cache.outputs.cache-hit != 'true'
+        name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential ninja-build cmake
+
+      - if: steps.llvm_cache.outputs.cache-hit != 'true'
+        name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup ccache
+        if: steps.llvm_cache.outputs.cache-hit != 'true'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ccache-llvm-${{ runner.os }}
+
+      - if: steps.llvm_cache.outputs.cache-hit != 'true'
+        name: Build LLVM
+        run: |
+          uv venv
+          make `pwd`/build/llvm/.stamp
+
+  build-standalone:
+    runs-on: ubuntu-latest
+    needs: [ download-subprojects, build-llvm ]
+    container:
+      image: ubuntu:22.04
+
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - name: Retrieve subproject downloads
+      uses: actions/cache/restore@v4
+      with:
+        key: subprojects-${{ hashFiles('subprojects/*.wrap') }}
+        fail-on-cache-miss: true
+        path: ./subprojects/packagecache
+
+    - name: Retrieve
+      uses: actions/cache/restore@v4
+      with:
+        key: llvm-${{ runner.os }}-${{ hashFiles('subprojects/llvm.wrap', 'subprojects/packagefiles/llvm/*') }}
+        fail-on-cache-miss: true
+        path: |
+          ./build/llvm
+          ./build/zlib
+
+    - name: Install dependencies
+      run: |
+        apt-get update
+        apt-get install -y build-essential ninja-build cmake flex bison
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ccache-standalone-${{ runner.os }}
+
+    - name: Build standalone
+      run: |
+        mkdir build/build-zlib
+        touch build/build-zlib/.stamp
+        touch build/zlib/.stamp
+        mkdir build/build-llvm
+        touch build/build-llvm/.stamp
+        touch build/llvm/.stamp
+        uv venv
+        make standalone
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: standalone
+        path: dist/usr/bin/rustica-engine
+

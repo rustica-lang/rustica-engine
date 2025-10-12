@@ -1,0 +1,39 @@
+From af896e1c1de2bfd8add4b841fb820f13214761e7 Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Fri, 3 Oct 2025 11:18:17 +0800
+Subject: [PATCH 1/4] fix: false OOB in array.fill for interp
+
+---
+ core/iwasm/interpreter/wasm_interp_classic.c | 2 +-
+ core/iwasm/interpreter/wasm_interp_fast.c    | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/core/iwasm/interpreter/wasm_interp_classic.c b/core/iwasm/interpreter/wasm_interp_classic.c
+index edc473f2..d0ac01bd 100644
+--- a/core/iwasm/interpreter/wasm_interp_classic.c
++++ b/core/iwasm/interpreter/wasm_interp_classic.c
+@@ -3162,7 +3162,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
+ 
+                         if (len > 0) {
+                             if ((uint64)start_offset + len
+-                                >= wasm_array_obj_length(array_obj)) {
++                                > wasm_array_obj_length(array_obj)) {
+                                 wasm_set_exception(
+                                     module, "out of bounds array access");
+                                 goto got_exception;
+diff --git a/core/iwasm/interpreter/wasm_interp_fast.c b/core/iwasm/interpreter/wasm_interp_fast.c
+index 36d4538f..8f6bceb5 100644
+--- a/core/iwasm/interpreter/wasm_interp_fast.c
++++ b/core/iwasm/interpreter/wasm_interp_fast.c
+@@ -2562,7 +2562,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
+ 
+                         if (len > 0) {
+                             if ((uint64)start_offset + len
+-                                >= wasm_array_obj_length(array_obj)) {
++                                > wasm_array_obj_length(array_obj)) {
+                                 wasm_set_exception(
+                                     module, "out of bounds array access");
+                                 goto got_exception;
+-- 
+2.51.0
+

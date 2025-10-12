@@ -1,0 +1,84 @@
+diff --git a/meson.build b/meson.build
+new file mode 100644
+index 000000000..9caad419d
+--- /dev/null
++++ b/meson.build
+@@ -0,0 +1,66 @@
++project('llvm', 'cpp')
++
++llvm_defines = {
++    'CMAKE_BUILD_TYPE': 'Release',
++    'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
++    'LLVM_APPEND_VC_REV': 'ON',
++    'LLVM_BUILD_EXAMPLES': 'OFF',
++    'LLVM_BUILD_LLVM_DYLIB': 'OFF',
++    'LLVM_ENABLE_BINDINGS': 'OFF',
++    'LLVM_ENABLE_IDE': 'OFF',
++    'LLVM_ENABLE_LIBEDIT': 'OFF',
++    'LLVM_ENABLE_TERMINFO': 'OFF',
++    'LLVM_ENABLE_ZLIB': 'ON',
++    'LLVM_INCLUDE_BENCHMARKS': 'OFF',
++    'LLVM_INCLUDE_DOCS': 'OFF',
++    'LLVM_INCLUDE_EXAMPLES': 'OFF',
++    'LLVM_INCLUDE_UTILS': 'OFF',
++    'LLVM_INCLUDE_TESTS': 'OFF',
++    'LLVM_OPTIMIZED_TABLEGEN': 'ON',
++    'LLVM_TARGETS_TO_BUILD': 'AArch64;ARM;RISCV;X86;LoongArch',
++    'LLVM_ENABLE_PROJECTS': 'clang',
++    'LLVM_ENABLE_LIBXML2': 'OFF',
++    'LLVM_INCLUDE_TOOLS': 'OFF',
++    'LLVM_ENABLE_ZSTD': 'OFF',
++    'CMAKE_INSTALL_PREFIX': get_option('prefix'),
++}
++
++if host_machine.system() != 'windows'
++    llvm_defines += {
++        'LLVM_CCACHE_BUILD': 'ON',
++    }
++endif
++if host_machine.system() == 'linux'
++    llvm_defines += {
++        'LLVM_USE_PERF': 'ON',
++    }
++endif
++
++if get_option('zlib_dir') != ''
++    zlib_prefix = get_option('zlib_dir')
++    llvm_defines += {
++        'ZLIB_LIBRARY': zlib_prefix / 'lib' / 'libz.a',
++        'ZLIB_INCLUDE_DIR': zlib_prefix / 'include',
++    }
++endif
++
++build_dir = meson.project_build_root()
++source_dir = meson.project_source_root()
++
++command_cmake = ['cmake', '-G', 'Ninja', '-S', source_dir / 'llvm', '-B', build_dir]
++foreach key, val : llvm_defines
++    command_cmake += ['-D' + key + '=' + val]
++endforeach
++
++cmake_configure = custom_target('cmake_configure',
++    command: command_cmake + ['&&', 'touch', '@OUTPUT@'],
++    output: 'configure.stamp',
++    build_by_default: true
++)
++
++cmake_build_install = custom_target('cmake_build_install',
++    command: ['cmake', '--build', build_dir, '--target', 'install', '&&', 'touch', '@OUTPUT@'],
++    output: 'install.stamp',
++    depends: cmake_configure,
++    build_by_default: true
++)
+diff --git a/meson_options.txt b/meson_options.txt
+new file mode 100644
+index 000000000..cd1f58c4c
+--- /dev/null
++++ b/meson_options.txt
+@@ -0,0 +1,6 @@
++option(
++    'zlib_dir',
++    type: 'string',
++    value: '',
++    description: 'Path to a pre-installed zlib (e.g., /path/to/zlib)',
++)

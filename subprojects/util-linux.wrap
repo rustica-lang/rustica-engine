@@ -1,0 +1,9 @@
+[wrap-file]
+directory = util-linux-2.41.2
+source_url = https://github.com/util-linux/util-linux/archive/refs/tags/v2.41.2.tar.gz
+source_filename = util-linux-2.41.2.tar.gz
+source_hash = 534aa113a323d6866c5f46baf909618dcc60c391ad24a91814e5d21511cefd30
+diff_files = util-linux/3761.patch, util-linux/uuid_h.patch
+
+[provide]
+uuid = uuid_dep

@@ -1,5 +1,6 @@
 /.idea/
-/*.so
-/src/**/*.bc
-/src/**/*.o
-/vendor/
+/.venv/
+/build/
+/data/
+/dist/
+/.python-version

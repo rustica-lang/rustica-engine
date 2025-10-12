@@ -12,79 +12,63 @@
 这个项目还在开发中，请勿用于生产环境。
 
 
-## 设计目标
+## 特性
 
 * **快速**：使用 WAMR/LLVM，预编译 WASM 和查询语句
 * **安全**：多进程模型，严格的隔离设计
 * **原生**：镜像 PostgreSQL 的数据和类型
 * **零拷贝**：直接访问网络缓冲区和数据库共享内存
 
+燕几图引擎没有使用 WASI 或是 Component Model，而是在更细的粒度上定义了一套
+FFI 接口，为各种 PostgreSQL 的数据类型和函数提供了更优化的封装。
 
-## 安装
+目前，以下编程语言可以生成适用于燕几图引擎的 WebAssembly 模块：
 
-1. 安装系统依赖 (以 Arch Linux 为例)：
+* 燕几图编程语言（使用 MoonGRES 后端）
+* 月兔编程语言（通过 MoonGRES 扩展）
 
-    ```
-    $ sudo pacman -S llvm postgresql
-    ```
-
-2. 构建并安装：
-
-    ```
-    $ make
-    $ sudo make install
-    ```
+燕几图引擎还有一种独立的命令行形态，静态链接了 PostgreSQL
+的后端代码，可以在不启动数据库的情况下，作为运行时来执行相同的
+WebAssembly 程序，这对于调试和测试非常有用。
 
 
 ## 开发
 
+此项目由改装过的 Meson 配置，Ninja 构建，而 Meson 本身的改装由 uv
+来跑。`Makefile` 只提供一些便捷的命令封装。
+
 * 安装系统依赖 (以 Arch Linux 为例)：
 
     ```
-    $ sudo pacman -S llvm lldb
+    $ sudo pacman -S make gcc ninja uv llvm18 bison flex
     ```
 
 * 构建扩展程序并运行开发版的 Postgres：
 
     ```
-    $ make run DEV=1 -j $(nproc)
-    ```
-
-* 当你修改了 Makefile 中的设置时，重新构建扩展程序：
-
-    ```
-    $ make clean DEV=1
-    ```
-
-* 彻底清空构建文件：
-
-    ```
-    $ make nuke
+    $ make
+    $ make run
     ```
 
 
 ## 测试
 
-1. 将 WASM 二进制文件转换为八进制数，以便进行下一步操作：
+1. 安装 MoonGRES：
 
     ```
-    $ xxd -p target/wasm-gc/release/build/main/main.wasm | tr -d '\n'
+    $ curl ...TBD... | sh
     ```
 
-2. 部署 WASM 应用程序：
+2. 用之前构建的 `rustica-engine` 替代 MoonGRES 自带的 `rustica-engine`：
 
     ```
-    $ psql -h /tmp postgres
-    postgres=# CREATE EXTENSION "rustica-engine" CASCADE;
-    postgres=# DELETE FROM rustica.queries;
-    postgres=# DELETE FROM rustica.modules;
-    postgres=# WITH wasm AS (SELECT '\x0061736d01000000010f035e7801600364007f7f017f600000020c0103656e760473656e6400010304030102020401000503010001060100070a01065f737461727400030801020901000c01010a21030a0020002001200210000b02000b110041004133fb0900004100413310011a0b0b36010133485454502f312e3020323030204f4b0d0a436f6e74656e742d4c656e6774683a2031320d0a0d0a68656c6c6f20776f726c640a'::bytea AS code), compiled AS (SELECT rustica.compile_wasm(code) AS result FROM wasm) INSERT INTO rustica.modules SELECT 'main', code, (result).bin_code, (result).heap_types FROM wasm, compiled RETURNING name;
+    $ ln -sf $(pwd)/install/bin/rustica-engine ~/.moon/bin/rustica-engine
     ```
 
-3. 访问 API：
+3. 运行 MoonBit core 测试套件：
 
     ```
-    $ curl localhost:8080
+    $ cd ~/.moon/lib/core && moon test --target moongres
     ```
 
 
