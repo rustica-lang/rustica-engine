@@ -3,6 +3,8 @@
 
 #include "postgres.h"
 #include "getopt_long.h"
+#include "catalog/pg_collation_d.h"
+#include "mb/pg_wchar.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 
@@ -140,6 +142,12 @@ main(int argc, char *argv[]) {
     init_locale("LC_TIME", LC_TIME, "C");
 
     unsetenv("LC_ALL");
+    SetDatabaseEncoding(PG_UTF8);
+
+    // Initialize default_locale with ICU collator
+    default_locale.provider = COLLPROVIDER_ICU;
+    default_locale.deterministic = true;
+    make_icu_collator("", NULL, &default_locale);
 
     PG_TRY();
     {

@@ -1,0 +1,388 @@
+From 7f1a30fa74f8a06fd28953f8a35a8e9cfaf47d79 Mon Sep 17 00:00:00 2001
+From: Xenia Lu <xenia.lyy@gmail.com>
+Date: Thu, 16 Oct 2025 10:56:58 +0800
+Subject: [PATCH 4/5] Add basic SUPPORT_NUL_IN_STRING
+
+---
+ core/config.h                              |  4 ++
+ core/iwasm/aot/aot_loader.c                | 53 ++++++++++++++++------
+ core/iwasm/aot/aot_runtime.c               |  9 +++-
+ core/iwasm/compilation/aot.c               |  3 ++
+ core/iwasm/compilation/aot.h               |  3 ++
+ core/iwasm/compilation/aot_emit_aot_file.c | 13 ++++++
+ core/iwasm/interpreter/wasm.h              |  6 +++
+ core/iwasm/interpreter/wasm_loader.c       | 18 ++++++--
+ core/iwasm/interpreter/wasm_runtime.c      | 30 ++++++++++--
+ 9 files changed, 118 insertions(+), 21 deletions(-)
+
+diff --git a/core/config.h b/core/config.h
+index 3ee0b2cd..54150477 100644
+--- a/core/config.h
++++ b/core/config.h
+@@ -724,4 +724,8 @@ unless used elsewhere */
+ #define WASM_ENABLE_EXTENDED_CONST_EXPR 0
+ #endif
+ 
++#ifndef WASM_SUPPORT_NUL_IN_STRING
++#define WASM_SUPPORT_NUL_IN_STRING 1
++#endif
++
+ #endif /* end of _CONFIG_H_ */
+diff --git a/core/iwasm/aot/aot_loader.c b/core/iwasm/aot/aot_loader.c
+index 771ef87f..95984387 100644
+--- a/core/iwasm/aot/aot_loader.c
++++ b/core/iwasm/aot/aot_loader.c
+@@ -194,12 +194,20 @@ GET_U16_FROM_ADDR(const uint8 *p)
+         p += len;                            \
+     } while (0)
+ 
+-#define read_string(p, p_end, str)                                      \
+-    do {                                                                \
+-        if (!(str = load_string((uint8 **)&p, p_end, module,            \
+-                                is_load_from_file_buf, true, error_buf, \
+-                                error_buf_size)))                       \
+-            goto fail;                                                  \
++#define read_string(p, p_end, str)                                            \
++    do {                                                                      \
++        if (!(str = load_string((uint8 **)&p, p_end, module,                  \
++                                is_load_from_file_buf, true, NULL, error_buf, \
++                                error_buf_size)))                             \
++            goto fail;                                                        \
++    } while (0)
++
++#define read_string_len(p, p_end, str, len)                                  \
++    do {                                                                     \
++        if (!(str = load_string((uint8 **)&p, p_end, module,                 \
++                                is_load_from_file_buf, true, len, error_buf, \
++                                error_buf_size)))                            \
++            goto fail;                                                       \
+     } while (0)
+ 
+ #else /* else of (WASM_ENABLE_WORD_ALIGN_READ != 0) */
+@@ -230,12 +238,20 @@ GET_U16_FROM_ADDR(const uint8 *p)
+         p += len;                            \
+     } while (0)
+ 
+-#define read_string(p, p_end, str)                                \
+-    do {                                                          \
+-        if (!(str = load_string((uint8 **)&p, p_end, module,      \
+-                                is_load_from_file_buf, error_buf, \
+-                                error_buf_size)))                 \
+-            goto fail;                                            \
++#define read_string(p, p_end, str)                                      \
++    do {                                                                \
++        if (!(str = load_string((uint8 **)&p, p_end, module,            \
++                                is_load_from_file_buf, NULL, error_buf, \
++                                error_buf_size)))                       \
++            goto fail;                                                  \
++    } while (0)
++
++#define read_string_len(p, p_end, str, len)                            \
++    do {                                                               \
++        if (!(str = load_string((uint8 **)&p, p_end, module,           \
++                                is_load_from_file_buf, len, error_buf, \
++                                error_buf_size)))                      \
++            goto fail;                                                 \
+     } while (0)
+ 
+ #endif /* end of (WASM_ENABLE_WORD_ALIGN_READ != 0) */
+@@ -343,7 +359,7 @@ load_string(uint8 **p_buf, const uint8 *buf_end, AOTModule *module,
+ #if (WASM_ENABLE_WORD_ALIGN_READ != 0)
+             bool is_vram_word_align,
+ #endif
+-            char *error_buf, uint32 error_buf_size)
++            uint32 *length, char *error_buf, uint32 error_buf_size)
+ {
+     uint8 *p = *p_buf;
+     const uint8 *p_end = buf_end;
+@@ -366,11 +382,13 @@ load_string(uint8 **p_buf, const uint8 *buf_end, AOTModule *module,
+     }
+ #endif
+     else if (is_load_from_file_buf) {
++#if WASM_SUPPORT_NUL_IN_STRING == 0
+         /* The string is always terminated with '\0', use it directly.
+          * In this case, the file buffer can be referred to after loading.
+          */
+         if (p[str_len - 1] != '\0')
+             goto fail;
++#endif
+ 
+         str = (char *)p;
+     }
+@@ -378,8 +396,10 @@ load_string(uint8 **p_buf, const uint8 *buf_end, AOTModule *module,
+         /* Load from sections, the file buffer cannot be referred to
+            after loading, we must create another string and insert it
+            into const string set */
++#if WASM_SUPPORT_NUL_IN_STRING == 0
+         if (p[str_len - 1] != '\0')
+             goto fail;
++#endif
+ 
+         if (!(str = aot_const_str_set_insert((uint8 *)p, str_len, module,
+ #if (WASM_ENABLE_WORD_ALIGN_READ != 0)
+@@ -392,6 +412,8 @@ load_string(uint8 **p_buf, const uint8 *buf_end, AOTModule *module,
+     p += str_len;
+ 
+     *p_buf = p;
++    if (length)
++        *length = str_len;
+     return str;
+ fail:
+     return NULL;
+@@ -2237,7 +2259,12 @@ load_import_globals(const uint8 **p_buf, const uint8 *buf_end,
+         read_uint8(buf, buf_end, import_globals[i].type.val_type);
+         read_uint8(buf, buf_end, import_globals[i].type.is_mutable);
+         read_string(buf, buf_end, import_globals[i].module_name);
++#if WASM_SUPPORT_NUL_IN_STRING == 0
+         read_string(buf, buf_end, import_globals[i].global_name);
++#else
++        read_string_len(buf, buf_end, import_globals[i].global_name,
++                        &import_globals[i].global_name_len);
++#endif
+ 
+         if (!is_valid_value_type(import_globals[i].type.val_type)) {
+             return false;
+diff --git a/core/iwasm/aot/aot_runtime.c b/core/iwasm/aot/aot_runtime.c
+index 85d7a3ca..f6c205f8 100644
+--- a/core/iwasm/aot/aot_runtime.c
++++ b/core/iwasm/aot/aot_runtime.c
+@@ -1868,8 +1868,15 @@ check_linked_symbol(AOTModule *module, char *error_buf, uint32 error_buf_size)
+         AOTImportGlobal *global = module->import_globals + i;
+         if (!global->is_linked) {
+             set_error_buf_v(error_buf, error_buf_size,
++#if WASM_ENABLE_MULTI_MODULE == 0
+                             "failed to link import global (%s, %s)",
+-                            global->module_name, global->global_name);
++                            global->module_name, global->global_name
++#else
++                            "failed to link import global (%s, %.*s)",
++                            global->module_name, global->global_name_len,
++                            global->global_name
++#endif
++            );
+             return false;
+         }
+     }
+diff --git a/core/iwasm/compilation/aot.c b/core/iwasm/compilation/aot.c
+index 5e1e554a..ec93ec51 100644
+--- a/core/iwasm/compilation/aot.c
++++ b/core/iwasm/compilation/aot.c
+@@ -236,6 +236,9 @@ aot_create_import_globals(const WASMModule *module, bool gc_enabled,
+         WASMGlobalImport *import_global = &module->import_globals[i].u.global;
+         import_globals[i].module_name = import_global->module_name;
+         import_globals[i].global_name = import_global->field_name;
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++        import_globals[i].global_name_len = import_global->field_name_len;
++#endif
+         import_globals[i].type.val_type = import_global->type.val_type;
+         import_globals[i].type.is_mutable = import_global->type.is_mutable;
+         import_globals[i].global_data_linked =
+diff --git a/core/iwasm/compilation/aot.h b/core/iwasm/compilation/aot.h
+index 973d198c..cb953152 100644
+--- a/core/iwasm/compilation/aot.h
++++ b/core/iwasm/compilation/aot.h
+@@ -142,6 +142,9 @@ typedef struct AOTTableInitData {
+ typedef struct AOTImportGlobal {
+     char *module_name;
+     char *global_name;
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++    uint32 global_name_len;
++#endif
+     WASMGlobalType type;
+     uint32 size;
+     /* The data offset of current global in global data */
+diff --git a/core/iwasm/compilation/aot_emit_aot_file.c b/core/iwasm/compilation/aot_emit_aot_file.c
+index 12749305..ad1e20fe 100644
+--- a/core/iwasm/compilation/aot_emit_aot_file.c
++++ b/core/iwasm/compilation/aot_emit_aot_file.c
+@@ -653,7 +653,11 @@ get_import_global_size(AOTCompContext *comp_ctx, AOTImportGlobal *import_global)
+     uint32 size = (uint32)sizeof(uint8) * 2
+                   + get_string_size(comp_ctx, import_global->module_name);
+     size = align_uint(size, 2);
++#if WASM_SUPPORT_NUL_IN_STRING == 0
+     size += get_string_size(comp_ctx, import_global->global_name);
++#else
++    size += (uint32)sizeof(uint16) + import_global->global_name_len;
++#endif
+     return size;
+ }
+ 
+@@ -2282,7 +2286,16 @@ aot_emit_import_global_info(uint8 *buf, uint8 *buf_end, uint32 *p_offset,
+         EMIT_U8(import_global->type.is_mutable);
+         EMIT_STR(import_global->module_name);
+         offset = align_uint(offset, 2);
++#if WASM_SUPPORT_NUL_IN_STRING == 0
+         EMIT_STR(import_global->global_name);
++#else
++        if (import_global->global_name_len > UINT16_MAX) {
++            aot_set_last_error("import global name is too long");
++            return false;
++        }
++        EMIT_U16((uint16)import_global->global_name_len);
++        EMIT_BUF(import_global->global_name, import_global->global_name_len);
++#endif
+     }
+ 
+     if (offset - *p_offset
+diff --git a/core/iwasm/interpreter/wasm.h b/core/iwasm/interpreter/wasm.h
+index 0dd73958..9ffb9cd6 100644
+--- a/core/iwasm/interpreter/wasm.h
++++ b/core/iwasm/interpreter/wasm.h
+@@ -645,6 +645,9 @@ typedef struct WASMGlobalType {
+ typedef struct WASMGlobalImport {
+     char *module_name;
+     char *field_name;
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++    uint32 field_name_len;
++#endif
+     WASMGlobalType type;
+     bool is_linked;
+     /* global data after linked */
+@@ -833,6 +836,9 @@ typedef struct WASIArguments {
+ typedef struct StringNode {
+     struct StringNode *next;
+     char *str;
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++    uint32 str_len;
++#endif
+ } StringNode, *StringList;
+ 
+ typedef struct BrTableCache {
+diff --git a/core/iwasm/interpreter/wasm_loader.c b/core/iwasm/interpreter/wasm_loader.c
+index b86c32d9..4b8ad2d9 100644
+--- a/core/iwasm/interpreter/wasm_loader.c
++++ b/core/iwasm/interpreter/wasm_loader.c
+@@ -3237,7 +3237,11 @@ fail:
+ static bool
+ load_global_import(const uint8 **p_buf, const uint8 *buf_end,
+                    WASMModule *parent_module, char *sub_module_name,
+-                   char *global_name, WASMGlobalImport *global, char *error_buf,
++                   char *global_name,
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++                   uint32 global_name_len,
++#endif
++                   WASMGlobalImport *global, char *error_buf,
+                    uint32 error_buf_size)
+ {
+     const uint8 *p = *p_buf, *p_end = buf_end;
+@@ -3326,6 +3330,9 @@ load_global_import(const uint8 **p_buf, const uint8 *buf_end,
+ 
+     global->module_name = sub_module_name;
+     global->field_name = global_name;
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++    global->field_name_len = global_name_len;
++#endif
+     global->type.val_type = declare_type;
+     global->type.is_mutable = (declare_mutable == 1);
+ 
+@@ -3737,9 +3744,12 @@ load_import_section(const uint8 *buf, const uint8 *buf_end, WASMModule *module,
+                 case IMPORT_KIND_GLOBAL: /* import global */
+                     bh_assert(import_globals);
+                     import = import_globals++;
+-                    if (!load_global_import(&p, p_end, module, sub_module_name,
+-                                            field_name, &import->u.global,
+-                                            error_buf, error_buf_size)) {
++                    if (!load_global_import(
++                            &p, p_end, module, sub_module_name, field_name,
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++                            name_len,
++#endif
++                            &import->u.global, error_buf, error_buf_size)) {
+                         return false;
+                     }
+                     break;
+diff --git a/core/iwasm/interpreter/wasm_runtime.c b/core/iwasm/interpreter/wasm_runtime.c
+index b4aa483d..67e19af7 100644
+--- a/core/iwasm/interpreter/wasm_runtime.c
++++ b/core/iwasm/interpreter/wasm_runtime.c
+@@ -1991,8 +1991,15 @@ check_linked_symbol(WASMModuleInstance *module_inst, char *error_buf,
+             return false;
+ #else
+             set_error_buf_v(error_buf, error_buf_size,
++#if WASM_SUPPORT_NUL_IN_STRING == 0
+                             "failed to link import global (%s, %s)",
+-                            global->module_name, global->field_name);
++                            global->module_name, global->field_name
++#else
++                            "failed to link import global (%s, %.*s)",
++                            global->module_name, global->field_name_len,
++                            global->field_name
++#endif
++            );
+             return false;
+ #endif /* WASM_ENABLE_SPEC_TEST != 0 */
+         }
+@@ -4187,8 +4194,12 @@ wasm_get_module_mem_consumption(const WASMModule *module,
+         StringNode *node = module->const_str_list, *node_next;
+         while (node) {
+             node_next = node->next;
++#if WASM_SUPPORT_NUL_IN_STRING == 0
+             mem_conspn->const_strs_size +=
+                 sizeof(StringNode) + strlen(node->str) + 1;
++#else
++            mem_conspn->const_strs_size += sizeof(StringNode) + node->str_len;
++#endif
+             node = node_next;
+         }
+     }
+@@ -5004,12 +5015,14 @@ wasm_check_utf8_str(const uint8 *str, uint32 len)
+     while (p < p_end) {
+         chr = *p;
+ 
++#if WASM_SUPPORT_NUL_IN_STRING == 0
+         if (chr == 0) {
+             LOG_WARNING(
+                 "LIMITATION: a string which contains '\\00' is unsupported");
+             return false;
+         }
+-        else if (chr < 0x80) {
++#endif
++        if (chr < 0x80) {
+             p++;
+         }
+         else if (chr >= 0xC2 && chr <= 0xDF && p + 1 < p_end) {
+@@ -5080,6 +5093,7 @@ wasm_const_str_list_insert(const uint8 *str, uint32 len, WASMModule *module,
+         return "";
+     }
+     else if (is_load_from_file_buf) {
++        // TODO: WASM_SUPPORT_NUL_IN_STRING: drop
+         /* As the file buffer can be referred to after loading, we use
+            the previous byte of leb encoded size to adjust the string:
+            move string 1 byte backward and then append '\0' */
+@@ -5092,8 +5106,14 @@ wasm_const_str_list_insert(const uint8 *str, uint32 len, WASMModule *module,
+     /* Search const str list */
+     node = module->const_str_list;
+     while (node) {
++        uint32 str_len;
+         node_next = node->next;
+-        if (strlen(node->str) == len && !memcmp(node->str, str, len))
++#if WASM_SUPPORT_NUL_IN_STRING == 0
++        str_len = strlen(node->str);
++#else
++        str_len = node->str_len;
++#endif
++        if (str_len == len && !memcmp(node->str, str, len))
+             break;
+         node = node_next;
+     }
+@@ -5102,6 +5122,7 @@ wasm_const_str_list_insert(const uint8 *str, uint32 len, WASMModule *module,
+         return node->str;
+     }
+ 
++    // TODO: WASM_SUPPORT_NUL_IN_STRING: drop len + 1
+     if (!(node = runtime_malloc(sizeof(StringNode) + len + 1, error_buf,
+                                 error_buf_size))) {
+         return NULL;
+@@ -5110,6 +5131,9 @@ wasm_const_str_list_insert(const uint8 *str, uint32 len, WASMModule *module,
+     node->str = ((char *)node) + sizeof(StringNode);
+     bh_memcpy_s(node->str, len + 1, str, len);
+     node->str[len] = '\0';
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++    node->str_len = len;
++#endif
+ 
+     if (!module->const_str_list) {
+         /* set as head */
+-- 
+2.51.0
+

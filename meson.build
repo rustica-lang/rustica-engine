@@ -219,7 +219,11 @@ postgres_pure_lib = static_library('postgres_lib',
 
 cc = meson.get_compiler('c')
 llvm_inc_flag = '-I' + (get_option('llvm_dir') / 'include')
-wamr_c_flags = ['-Wno-incompatible-pointer-types', llvm_inc_flag]
+wamr_c_flags = [
+    '-DWASM_SUPPORT_NUL_IN_STRING=1',
+    '-Wno-incompatible-pointer-types',
+    llvm_inc_flag,
+]
 # https://github.com/bytecodealliance/wasm-micro-runtime/issues/4640
 if cc.has_argument('-fzero-init-padding-bits=unions')
   wamr_c_flags += ['-fzero-init-padding-bits=unions']
@@ -304,7 +308,7 @@ executable('rustica-engine',
 
 pg_mod_args = pg.get_variable('pg_mod_args')
 shared_module(
-    'rustica-engine',
+    'rustica-engine.so',
     'src/rustica/extension.c',
     sources: rustica_shared,
     include_directories: 'src',

@@ -1,7 +1,7 @@
-From 0df937642752c70d4d67136554c17c4f1430282f Mon Sep 17 00:00:00 2001
+From 6e9f7f280c00d4dbb85b79ba92a678e2907c6e1d Mon Sep 17 00:00:00 2001
 From: Xenia Lu <xenia.lyy@gmail.com>
 Date: Sun, 5 Oct 2025 09:36:44 +0800
-Subject: [PATCH 4/4] fix: typo in AOT stack dump with GC
+Subject: [PATCH 3/5] fix: typo in AOT stack dump with GC
 
 ---
  core/iwasm/aot/aot_runtime.c | 2 +-

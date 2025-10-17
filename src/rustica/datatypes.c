@@ -131,7 +131,7 @@ rst_obj_new_static(ObjType type, obj_t *obj_out, size_t embed_size) {
 
     anyref->header = WASM_OBJ_ANYREF_OBJ_FLAG;
     anyref->host_obj = obj;
-    externref->header = WASM_OBJ_EXTERNREF_OBJ_FLAG;
+    externref->header = WASM_OBJ_EXTERNREF_OBJ_FLAG | WASM_OBJ_STATIC_OBJ_FLAG;
     externref->internal_obj = (WASMObjectRef)anyref;
     rv->gc_obj = (wasm_obj_t)externref;
     return rv;
