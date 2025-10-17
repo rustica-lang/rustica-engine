@@ -3,18 +3,17 @@ DIST_DIR = $(shell pwd)/dist
 DEV_DATA_DIR = $(shell pwd)/data
 DEV_LLVM_DIR = /usr/lib/llvm18
 
-# Default target: build for development
-.PHONY: build
-build:
+$(BUILD_DIR)/install/.stamp: $(BUILD_DIR)/build/.stamp meson.build meson.py $(shell find src -name '*.c' -o -name '*.h')
+	uv run meson.py install -C $(BUILD_DIR)/build --destdir=$(BUILD_DIR)/install
+	touch $@
+
+.PHONY: rebuild
+rebuild:
 	touch $(BUILD_DIR)/build/.stamp
 	$(MAKE) $(BUILD_DIR)/install/.stamp
 
 $(BUILD_DIR)/build/.stamp:
 	uv run meson.py setup $(BUILD_DIR)/build --prefix=/ -Dllvm_dir=$(DEV_LLVM_DIR)
-	touch $@
-
-$(BUILD_DIR)/install/.stamp: $(BUILD_DIR)/build/.stamp
-	uv run meson.py install -C $(BUILD_DIR)/build --destdir=$(BUILD_DIR)/install
 	touch $@
 
 # Run a development PostgreSQL instance
@@ -103,4 +102,4 @@ clean:
 # Delete all build artifacts, development files, and distribution files
 .PHONY: distclean
 distclean: clean
-	rm -rf $(BUILD_DIR) $(DIST_DIR) $(DEV_DATA_DIR)
+	rm -rf $(BUILD_DIR) $(DIST_DIR) $(DEV_DATA_DIR) subprojects/wasm-micro-runtime-WAMR-*

@@ -8,7 +8,6 @@
 #include "utils/builtins.h"
 #include "utils/json.h"
 
-#include "rustica/env.h"
 #include "rustica/datatypes.h"
 #include "rustica/moontest.h"
 

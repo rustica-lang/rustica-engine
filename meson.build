@@ -273,10 +273,11 @@ uncommon_shared_lib = shared_library('uncommon_shared',
 # Build the Rustica Engine
 
 rustica_shared = files(
-    'src/rustica/env.c',
+    'src/rustica/bh_log_to_pg.c',
     'src/rustica/datatypes.c',
-    'src/rustica/adt/text.c',
+    'src/rustica/adt/clock.c',
     'src/rustica/adt/stringbuilder.c',
+    'src/rustica/adt/text.c',
 )
 rustica_deps = [vmlib, pg.get_variable('uuid')]
 rustica_cargs = wamr.get_cmake_definitions('-DWASM')
