@@ -3,5 +3,11 @@ directory = wasm-micro-runtime-WAMR-2.4.2
 source_url = https://github.com/bytecodealliance/wasm-micro-runtime/archive/refs/tags/WAMR-2.4.2.tar.gz
 source_filename = wamr-2.4.2.tar.gz
 source_hash = 73380561a01f4863506e855c2c265cf03c5b6efb17bbb8c9bbafe80745fd00ef
-diff_files = wamr/0001.patch, wamr/0002.patch, wamr/0004.patch
 method = cmake
+diff_files =
+    wamr/0001-fix-false-OOB-in-array.fill-for-interp.patch,
+    wamr/0002-loader-fix-block-loop-ref-params-type-checking.patch,
+    wamr/0003-fix-typo-in-AOT-stack-dump-with-GC.patch,
+    wamr/0004-Add-basic-SUPPORT_NUL_IN_STRING.patch,
+    wamr/0005-Support-custom-global-resolver.patch,
+    wamr/0006-static-externref.patch

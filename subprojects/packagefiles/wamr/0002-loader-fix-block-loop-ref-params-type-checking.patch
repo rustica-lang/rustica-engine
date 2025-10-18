@@ -1,7 +1,7 @@
-From a0999fbf49f7d89f789c809f3561817e98704728 Mon Sep 17 00:00:00 2001
+From b850e17394190ae032040d3ed55acf97c4ac6ee7 Mon Sep 17 00:00:00 2001
 From: Xenia Lu <xenia.lyy@gmail.com>
 Date: Wed, 24 Sep 2025 09:14:14 +0800
-Subject: [PATCH 2/4] loader: fix block/loop ref params type checking
+Subject: [PATCH 2/5] loader: fix block/loop ref params type checking
 
 ---
  core/iwasm/interpreter/wasm_loader.c | 29 ++++++++++++++++++++++++++++

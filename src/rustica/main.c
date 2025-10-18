@@ -3,6 +3,8 @@
 
 #include "postgres.h"
 #include "getopt_long.h"
+#include "catalog/pg_collation_d.h"
+#include "mb/pg_wchar.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 
@@ -11,7 +13,7 @@
 #include "gc_export.h"
 #include "aot_export.h"
 
-#include "rustica/env.h"
+#include "rustica/datatypes.h"
 #include "rustica/moontest.h"
 
 #define HEAP_M 512
@@ -28,6 +30,7 @@ run_moontest(wasm_exec_env_t exec_env, va_list args);
 static void
 run_wasm_with(const char *wasm_file,
               bool use_aot,
+              bool is_moontest,
               void (*fn)(wasm_exec_env_t, va_list),
               ...);
 
@@ -122,8 +125,6 @@ main(int argc, char *argv[]) {
     bool use_aot = true;
     int rv = 0;
 
-    saved_argc = argc;
-    saved_argv = argv;
     progname = get_progname(argv[0]);
 
     MemoryContextInit();
@@ -139,6 +140,12 @@ main(int argc, char *argv[]) {
     init_locale("LC_TIME", LC_TIME, "C");
 
     unsetenv("LC_ALL");
+    SetDatabaseEncoding(PG_UTF8);
+
+    // Initialize default_locale with ICU collator
+    default_locale.provider = COLLPROVIDER_ICU;
+    default_locale.deterministic = true;
+    make_icu_collator("", NULL, &default_locale);
 
     PG_TRY();
     {
@@ -147,7 +154,7 @@ main(int argc, char *argv[]) {
             case RUN:
                 if (optind >= argc)
                     ereport(ERROR, errmsg("No wasm file specified for 'run'"));
-                run_wasm_with(argv[optind], use_aot, run_start);
+                run_wasm_with(argv[optind], use_aot, false, run_start);
                 break;
 
             case MOONTEST:
@@ -160,6 +167,7 @@ main(int argc, char *argv[]) {
                     if (wasm_file)
                         run_wasm_with(wasm_file,
                                       use_aot,
+                                      true,
                                       run_moontest,
                                       moontest_spec);
                 }
@@ -193,8 +201,18 @@ main(int argc, char *argv[]) {
     return rv;
 }
 
+static void
+exception_throw(wasm_exec_env_t exec_env) {
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_runtime_set_exception(inst, "panic");
+}
+
+static NativeSymbol exception_symbols[] = {
+    { "throw", exception_throw, "()", NULL },
+};
+
 static inline void
-init_wamr() {
+init_wamr(bool is_moontest) {
     RuntimeInitArgs init_args = {
         .mem_alloc_type = Alloc_With_Allocator,
         .mem_alloc_option = { .allocator = { .malloc_func = palloc,
@@ -207,7 +225,15 @@ init_wamr() {
     if (!wasm_runtime_full_init(&init_args))
         ereport(ERROR, errmsg("Failed to initialize WASM runtime"));
 
-    rustica_register_natives();
+    rst_register_natives_text();
+    rst_register_natives_stringbuilder();
+    rst_register_natives_clock();
+    if (is_moontest
+        && !wasm_runtime_register_natives("exception",
+                                          exception_symbols,
+                                          sizeof(exception_symbols)
+                                              / sizeof(NativeSymbol)))
+        ereport(ERROR, errmsg("Failed to register exception natives"));
 }
 
 static inline uint8_t *
@@ -331,6 +357,7 @@ run_moontest(wasm_exec_env_t exec_env, va_list args) {
 static void
 run_wasm_with(const char *wasm_file,
               bool use_aot,
+              bool is_moontest,
               void (*fn)(wasm_exec_env_t, va_list),
               ...) {
     bool wamr_inited = false;
@@ -343,7 +370,7 @@ run_wasm_with(const char *wasm_file,
 
     PG_TRY();
     {
-        init_wamr();
+        init_wamr(is_moontest);
         wamr_inited = true;
         buffer = read_wasm_file(wasm_file, &size);
         if (use_aot) {

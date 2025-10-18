@@ -131,7 +131,7 @@ rst_obj_new_static(ObjType type, obj_t *obj_out, size_t embed_size) {
 
     anyref->header = WASM_OBJ_ANYREF_OBJ_FLAG;
     anyref->host_obj = obj;
-    externref->header = WASM_OBJ_EXTERNREF_OBJ_FLAG;
+    externref->header = WASM_OBJ_EXTERNREF_OBJ_FLAG | WASM_OBJ_STATIC_OBJ_FLAG;
     externref->internal_obj = (WASMObjectRef)anyref;
     rv->gc_obj = (wasm_obj_t)externref;
     return rv;
@@ -194,4 +194,21 @@ cstring_into_varatt_obj(wasm_exec_env_t exec_env,
         SET_VARSIZE(obj->body.ptr, len + VARHDRSZ);
     memcpy(VARDATA_ANY(obj->body.ptr), data, len);
     return rst_externref_of_obj(exec_env, obj);
+}
+
+void
+wasm_runtime_remove_local_obj_ref(wasm_exec_env_t exec_env,
+                                  wasm_local_obj_ref_t *me) {
+    wasm_local_obj_ref_t *current =
+        wasm_runtime_get_cur_local_obj_ref(exec_env);
+    if (current == me)
+        wasm_runtime_pop_local_obj_ref(exec_env);
+    else {
+        wasm_local_obj_ref_t *next;
+        while (current != me) {
+            next = current;
+            current = current->prev;
+        }
+        next->prev = me->prev;
+    }
 }

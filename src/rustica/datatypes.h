@@ -30,6 +30,7 @@
 #define OBJ_PORTAL 3
 #define OBJ_TUPLE_TABLE 4
 #define OBJ_HEAP_TUPLE 5
+#define OBJ_CLOCK_MONOTONIC 6
 
 #define OBJ_REFERENCING (1 << 0)
 #define OBJ_OWNS_BODY (1 << 1)
@@ -56,6 +57,7 @@ typedef struct Obj {
         Portal portal;           // only for OBJ_PORTAL
         SPITupleTable *tuptable; // only for OBJ_TUPLE_TABLE
         HeapTuple tuple;         // only for OBJ_HEAP_TUPLE
+        instr_time instr_time;   // only for OBJ_CLOCK_MONOTONIC
 
         void *ptr; // convenient compatible pointer for all types
     } body;
@@ -125,6 +127,13 @@ void
 rst_register_natives_uuid();
 
 void
+rst_register_natives_clock();
+
+void
 rst_init_context_for_jsonb(wasm_exec_env_t exec_env);
+
+void
+wasm_runtime_remove_local_obj_ref(wasm_exec_env_t exec_env,
+                                  wasm_local_obj_ref_t *me);
 
 #endif /* RUSTICA_DATATYPES_H */

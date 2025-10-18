@@ -1,29 +1,31 @@
-From e0813f59bed707e30efd0f3f49954d6ec0f5b31d Mon Sep 17 00:00:00 2001
+From 54cb509104b1add72ee02eac534569c6d64e1d25 Mon Sep 17 00:00:00 2001
 From: Xenia Lu <xenia.lyy@gmail.com>
 Date: Wed, 22 Jan 2025 18:46:35 +0800
 Subject: [PATCH 5/5] Support custom global resolver
 
 ---
- core/iwasm/aot/aot_loader.c          | 16 +++++++
- core/iwasm/common/wasm_native.c      | 70 ++++++++++++++++++++++++++++
- core/iwasm/common/wasm_native.h      | 21 +++++++++
- core/iwasm/interpreter/wasm.h        |  7 +++
- core/iwasm/interpreter/wasm_loader.c | 20 +++++++-
- 5 files changed, 133 insertions(+), 1 deletion(-)
+ core/iwasm/aot/aot_loader.c          | 18 +++++++
+ core/iwasm/common/wasm_native.c      | 73 ++++++++++++++++++++++++++++
+ core/iwasm/common/wasm_native.h      | 24 +++++++++
+ core/iwasm/interpreter/wasm.h        |  9 ++++
+ core/iwasm/interpreter/wasm_loader.c | 23 ++++++++-
+ 5 files changed, 146 insertions(+), 1 deletion(-)
 
 diff --git a/core/iwasm/aot/aot_loader.c b/core/iwasm/aot/aot_loader.c
-index 0949d2b8..6e7b6a0e 100644
+index 95984387..a8689580 100644
 --- a/core/iwasm/aot/aot_loader.c
 +++ b/core/iwasm/aot/aot_loader.c
-@@ -2161,6 +2161,22 @@ load_import_globals(const uint8 **p_buf, const uint8 *buf_end,
+@@ -2289,6 +2289,24 @@ load_import_globals(const uint8 **p_buf, const uint8 *buf_end,
          import_globals[i].is_linked = false;
  #endif
  
 +        /* Call custom globals resolver */
 +        if (!import_globals[i].is_linked) {
 +            WASMValue *linked_data = wasm_resolve_global(
-+                import_globals[i].module_name,
-+                import_globals[i].global_name,
++                import_globals[i].module_name, import_globals[i].global_name,
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++                import_globals[i].global_name_len,
++#endif
 +#if WASM_ENABLE_GC != 0
 +                NULL,
 +#endif
@@ -39,7 +41,7 @@ index 0949d2b8..6e7b6a0e 100644
              wasm_value_type_size(import_globals[i].type.val_type);
          import_globals[i].data_offset = data_offset;
 diff --git a/core/iwasm/common/wasm_native.c b/core/iwasm/common/wasm_native.c
-index 9e8764a2..e96c26ca 100644
+index 060bb2c3..d374c977 100644
 --- a/core/iwasm/common/wasm_native.c
 +++ b/core/iwasm/common/wasm_native.c
 @@ -20,6 +20,7 @@
@@ -50,12 +52,15 @@ index 9e8764a2..e96c26ca 100644
  
  #if WASM_ENABLE_LIBC_WASI != 0
  static void *g_wasi_context_key;
-@@ -319,6 +320,74 @@ wasm_native_unregister_natives(const char *module_name,
+@@ -324,6 +325,78 @@ wasm_native_unregister_natives(const char *module_name,
      return false;
  }
  
 +WASMValue *
 +wasm_resolve_global(const char *module_name, const char *global_name,
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++                    uint32 global_name_len,
++#endif
 +#if WASM_ENABLE_GC != 0
 +                    WASMRefType *ref_type,
 +#endif
@@ -68,13 +73,14 @@ index 9e8764a2..e96c26ca 100644
 +    while (node) {
 +        node_next = node->next;
 +        if (!strcmp(node->module_name, module_name)) {
-+            if ((rv = node->resolver(
-+                     global_name,
-+#if WASM_ENABLE_GC != 0
-+                     ref_type,
++            if ((rv = node->resolver(global_name,
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++                                     global_name_len,
 +#endif
-+                     val_type,
-+                     is_mutable)))
++#if WASM_ENABLE_GC != 0
++                                     ref_type,
++#endif
++                                     val_type, is_mutable)))
 +                break;
 +        }
 +        node = node_next;
@@ -125,13 +131,8 @@ index 9e8764a2..e96c26ca 100644
  #if WASM_ENABLE_MODULE_INST_CONTEXT != 0
  static uint32
  context_key_to_idx(void *key)
-@@ -1517,3 +1586,4 @@ wasm_native_lookup_quick_aot_entry(const WASMFuncType *func_type)
-     return NULL;
- }
- #endif /* end of WASM_ENABLE_QUICK_AOT_ENTRY != 0 */
-+
 diff --git a/core/iwasm/common/wasm_native.h b/core/iwasm/common/wasm_native.h
-index 5cb78bf9..0c40d01c 100644
+index 9a6afee1..3af48b50 100644
 --- a/core/iwasm/common/wasm_native.h
 +++ b/core/iwasm/common/wasm_native.h
 @@ -22,6 +22,12 @@ typedef struct NativeSymbolsNode {
@@ -147,12 +148,15 @@ index 5cb78bf9..0c40d01c 100644
  /**
   * Lookup global variable of a given import global
   * from libc builtin globals
-@@ -69,6 +75,21 @@ bool
+@@ -69,6 +75,24 @@ bool
  wasm_native_unregister_natives(const char *module_name,
                                 NativeSymbol *native_symbols);
  
 +WASMValue *
 +wasm_resolve_global(const char *module_name, const char *global_name,
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++                    uint32 global_name_len,
++#endif
 +#if WASM_ENABLE_GC != 0
 +                    WASMRefType *ref_type,
 +#endif
@@ -170,41 +174,45 @@ index 5cb78bf9..0c40d01c 100644
  struct WASMModuleInstanceCommon;
  
 diff --git a/core/iwasm/interpreter/wasm.h b/core/iwasm/interpreter/wasm.h
-index 03519c18..20578207 100644
+index 9ffb9cd6..ef88e00b 100644
 --- a/core/iwasm/interpreter/wasm.h
 +++ b/core/iwasm/interpreter/wasm.h
-@@ -1114,6 +1114,13 @@ typedef struct WASMBranchBlock {
+@@ -1172,6 +1172,15 @@ typedef struct WASMBranchBlock {
  #endif
  } WASMBranchBlock;
  
 +typedef WASMValue *(*wasm_global_resolver_t)(const char *name,
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++                                             uint32 name_len,
++#endif
 +#if WASM_ENABLE_GC != 0
 +                                             WASMRefType *ref_type,
 +#endif
-+                                             uint8 val_type,
-+                                             uint8 is_mutable);
++                                             uint8 val_type, uint8 is_mutable);
 +
  /**
   * Align an unsigned value on a alignment boundary.
   *
 diff --git a/core/iwasm/interpreter/wasm_loader.c b/core/iwasm/interpreter/wasm_loader.c
-index f62103a4..94504d6b 100644
+index 4b8ad2d9..cbb7310a 100644
 --- a/core/iwasm/interpreter/wasm_loader.c
 +++ b/core/iwasm/interpreter/wasm_loader.c
-@@ -3019,6 +3019,24 @@ load_global_import(const uint8 **p_buf, const uint8 *buf_end,
+@@ -3308,6 +3308,26 @@ load_global_import(const uint8 **p_buf, const uint8 *buf_end,
          global->is_linked = true;
      }
  #endif
 +
 +    /* Call custom globals resolver */
 +    if (!global->is_linked) {
-+        WASMValue *linked_data = wasm_resolve_global(sub_module_name,
-+                                                     global_name,
-+#if WASM_ENABLE_GC != 0
-+                                                     &ref_type,
++        WASMValue *linked_data =
++            wasm_resolve_global(sub_module_name, global_name,
++#if WASM_SUPPORT_NUL_IN_STRING != 0
++                                global_name_len,
 +#endif
-+                                                     declare_type,
-+                                                     declare_mutable);
++#if WASM_ENABLE_GC != 0
++                                &ref_type,
++#endif
++                                declare_type, declare_mutable);
 +        if (linked_data) {
 +            global->type.val_type = declare_type;
 +            global->type.is_mutable = declare_mutable;
@@ -216,15 +224,16 @@ index f62103a4..94504d6b 100644
  #if WASM_ENABLE_MULTI_MODULE != 0
      if (!global->is_linked
          && !wasm_runtime_is_built_in_module(sub_module_name)) {
-@@ -4037,7 +4055,7 @@ load_global_section(const uint8 *buf, const uint8 *buf_end, WASMModule *module,
+@@ -4361,7 +4381,8 @@ load_global_section(const uint8 *buf, const uint8 *buf_end, WASMModule *module,
                              ->globals[global_idx - module->import_global_count]
                              .ref_type;
                  }
 -                if (!wasm_reftype_is_subtype_of(
-+                if (global->ref_type && !wasm_reftype_is_subtype_of(
++                if (global->ref_type
++                    && !wasm_reftype_is_subtype_of(
                          global_type, global_ref_type, global->type.val_type,
                          global->ref_type, module->types, module->type_count)) {
                      set_error_buf(error_buf, error_buf_size, "type mismatch");
 -- 
-2.47.1
+2.51.0
 

@@ -230,20 +230,3 @@ wasm_runtime_unregister_and_unload(wasm_module_t module) {
     if (module->module_type == Wasm_Module_AoT)
         aot_unload((AOTModule *)module);
 }
-
-void
-wasm_runtime_remove_local_obj_ref(wasm_exec_env_t exec_env,
-                                  wasm_local_obj_ref_t *me) {
-    wasm_local_obj_ref_t *current =
-        wasm_runtime_get_cur_local_obj_ref(exec_env);
-    if (current == me)
-        wasm_runtime_pop_local_obj_ref(exec_env);
-    else {
-        wasm_local_obj_ref_t *next;
-        while (current != me) {
-            next = current;
-            current = current->prev;
-        }
-        next->prev = me->prev;
-    }
-}
