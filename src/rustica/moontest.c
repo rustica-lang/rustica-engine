@@ -196,8 +196,11 @@ json_object_end_cb(void *state) {
 
                 if (!filename) {
                     Assert(parse_state->filename != NULL);
-                    filename = cstring_into_varatt_obj(parse_state->exec_env,
-                        parse_state->filename, strlen(parse_state->filename), TEXTOID);
+                    filename =
+                        cstring_into_varatt_obj(parse_state->exec_env,
+                                                parse_state->filename,
+                                                strlen(parse_state->filename),
+                                                TEXTOID);
                 }
 
                 args[0].kind = WASM_EXTERNREF;

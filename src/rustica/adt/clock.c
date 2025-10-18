@@ -29,7 +29,9 @@ monotonic_nanos_since(wasm_exec_env_t exec_env, wasm_obj_t ref) {
 }
 
 static NativeSymbol clock_natives[] = {
-    { "realtime_micros_since_unix_epoch", realtime_micros_since_unix_epoch, "()I" },
+    { "realtime_micros_since_unix_epoch",
+      realtime_micros_since_unix_epoch,
+      "()I" },
     { "monotonic_now", monotonic_now, "()r" },
     { "monotonic_nanos_since", monotonic_nanos_since, "(r)I" },
 };

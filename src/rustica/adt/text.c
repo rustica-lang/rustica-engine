@@ -150,7 +150,7 @@ utf16_count_code_units(const char *mbstr, int size) {
         else if (mb_offset + ch > size)
             break; // Incomplete character at end of string
         if (ch < 4)
-            count += 1;  // Normal character
+            count += 1; // Normal character
         else
             count += 2; // Surrogate pair
         mb_offset += ch;
@@ -167,7 +167,8 @@ utf16_length(wasm_exec_env_t exec_env, wasm_obj_t obj) {
     int count;
     if (pg_database_encoding_max_length() == 1) {
         count = size;
-    } else {
+    }
+    else {
         count = utf16_count_code_units(data, size);
     }
     RST_FREE_IF_COPY(t, str);
@@ -188,7 +189,8 @@ utf16_char_code_at(wasm_exec_env_t exec_env, wasm_obj_t ref, int32_t index) {
         if (index < 0 || index >= size)
             goto oob_error;
         rv[0] = (unsigned char)data[index];
-    } else {
+    }
+    else {
         int mb_offset = 0;
         int utf16_index = 0;
         int32_t utf16_size = utf16_count_code_units(data, size);
@@ -233,12 +235,15 @@ oob_error:
 }
 
 static wasm_externref_obj_t
-utf16_from_char_code_array(wasm_exec_env_t exec_env, wasm_obj_t obj, int32_t start, int32_t length) {
+utf16_from_char_code_array(wasm_exec_env_t exec_env,
+                           wasm_obj_t obj,
+                           int32_t start,
+                           int32_t length) {
     wasm_array_obj_t arr = (wasm_array_obj_t)obj;
     uint32_t size = wasm_array_obj_length(arr);
     StringInfoData buf;
     wasm_externref_obj_t rv;
-    const char* err = "fromCharCodeArray failed";
+    const char *err = "fromCharCodeArray failed";
 
     if (length < 0)
         length = size; // To the end
@@ -246,11 +251,14 @@ utf16_from_char_code_array(wasm_exec_env_t exec_env, wasm_obj_t obj, int32_t sta
         start += size;
     if (start < 0 || start > size)
         ereport(ERROR,
-                (errcode(ERRCODE_SUBSTRING_ERROR), errmsg("start index out of range")));
+                (errcode(ERRCODE_SUBSTRING_ERROR),
+                 errmsg("start index out of range")));
     if (start + length > size)
         length = size - start; // Adjust to fit
     if (length == 0)
-        return rst_externref_of_owned_datum(exec_env, CStringGetTextDatum(""), TEXTOID);
+        return rst_externref_of_owned_datum(exec_env,
+                                            CStringGetTextDatum(""),
+                                            TEXTOID);
     initStringInfo(&buf);
     for (uint32_t i = start; i < size; i++) {
         wasm_value_t value;
@@ -271,18 +279,22 @@ utf16_from_char_code_array(wasm_exec_env_t exec_env, wasm_obj_t obj, int32_t sta
                 if (is_utf16_surrogate_second(value.i32)) {
                     ch = surrogate_pair_to_codepoint(cu, value.i32);
                     i++; // Consumed the low surrogate
-                } else {
+                }
+                else {
                     err = "Invalid surrogate pair";
                     goto error;
                 }
-            } else {
+            }
+            else {
                 err = "Incomplete surrogate pair";
                 goto error;
             }
-        } else if (is_utf16_surrogate_second(cu)) {
+        }
+        else if (is_utf16_surrogate_second(cu)) {
             err = "Unmatched low surrogate";
             goto error;
-        } else {
+        }
+        else {
             ch = cu; // Normal code unit
         }
         unicode_to_utf8(ch, utf8);
@@ -302,7 +314,7 @@ static wasm_externref_obj_t
 utf16_from_code_point(wasm_exec_env_t exec_env, int32_t code_point) {
     unsigned char buf[5];
     if (code_point == 0) {
-        obj_t obj = rst_obj_new(exec_env, OBJ_DATUM, NULL, VARHDRSZ_SHORT  + 1);
+        obj_t obj = rst_obj_new(exec_env, OBJ_DATUM, NULL, VARHDRSZ_SHORT + 1);
         obj->oid = TEXTOID;
         SET_VARSIZE_1B(obj->body.ptr, VARHDRSZ_SHORT + 1);
         VARDATA_ANY(obj->body.ptr)[0] = '\0';

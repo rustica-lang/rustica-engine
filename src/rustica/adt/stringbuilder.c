@@ -28,13 +28,14 @@ sb_read_text(wasm_exec_env_t exec_env, wasm_obj_t ref) {
     Datum txt_datum = wasm_externref_obj_get_datum(ref, TEXTOID);
     text *txt = DatumGetTextPP(txt_datum);
     char *start = VARDATA_ANY(txt);
-    obj_t obj = rst_obj_new(exec_env, OBJ_STRING_INFO, ref, sizeof(StringInfoData));
+    obj_t obj =
+        rst_obj_new(exec_env, OBJ_STRING_INFO, ref, sizeof(StringInfoData));
     if (txt_datum != PointerGetDatum(txt))
         obj->flags |= OBJ_OWNS_BODY_MEMBERS;
     obj->body.sb->data = (char *)txt;
     obj->body.sb->cursor = start - (char *)txt;
     obj->body.sb->len = VARSIZE_ANY_EXHDR(txt) + obj->body.sb->cursor;
-    obj->body.sb->maxlen = 0;  // read-only
+    obj->body.sb->maxlen = 0; // read-only
     return rst_externref_of_obj(exec_env, obj);
 }
 
@@ -140,7 +141,8 @@ sb_read_char(wasm_exec_env_t exec_env, wasm_obj_t refobj) {
     if (ch > 0 && sb->cursor + ch <= sb->len) {
         pg_mb2wchar_with_len(sb->data + sb->cursor, rv, ch);
         sb->cursor += ch;
-    } else {
+    }
+    else {
         // Invalid UTF-8 sequence, skip one byte
         sb->cursor += 1;
     }

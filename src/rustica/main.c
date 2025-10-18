@@ -228,10 +228,11 @@ init_wamr(bool is_moontest) {
     rst_register_natives_text();
     rst_register_natives_stringbuilder();
     rst_register_natives_clock();
-    if (is_moontest && !wasm_runtime_register_natives("exception",
-                                           exception_symbols,
-                                           sizeof(exception_symbols)
-                                               / sizeof(NativeSymbol)))
+    if (is_moontest
+        && !wasm_runtime_register_natives("exception",
+                                          exception_symbols,
+                                          sizeof(exception_symbols)
+                                              / sizeof(NativeSymbol)))
         ereport(ERROR, errmsg("Failed to register exception natives"));
 }
 

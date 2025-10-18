@@ -30,7 +30,11 @@ pg_log_vprintf(const char *format, va_list ap) {
 }
 
 void
-pg_bh_log(LogLevel log_level, const char *file, int line, const char *fmt, ...) {
+pg_bh_log(LogLevel log_level,
+          const char *file,
+          int line,
+          const char *fmt,
+          ...) {
     int elevel = LOG;
     switch (log_level) {
         case BH_LOG_LEVEL_FATAL:
@@ -70,5 +74,5 @@ pg_bh_log(LogLevel log_level, const char *file, int line, const char *fmt, ...) 
         }
         if (elevel >= ERROR)
             pg_unreachable();
-    } while(0);
+    } while (0);
 }
