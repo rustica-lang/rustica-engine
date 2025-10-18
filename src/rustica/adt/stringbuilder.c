@@ -8,7 +8,6 @@
 
 #include "wasm_runtime_common.h"
 #include "rustica/datatypes.h"
-#include "rustica/module.h"
 
 static wasm_externref_obj_t
 sb_new(wasm_exec_env_t exec_env, int32_t size_hint) {
