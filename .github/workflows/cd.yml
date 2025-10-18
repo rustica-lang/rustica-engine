@@ -1,10 +1,7 @@
-name: CI
+name: CD
 
 on:
   push:
-    branches: [ master ]
-
-  pull_request:
     branches: [ master ]
 
 jobs:
@@ -141,9 +138,44 @@ jobs:
         touch build/llvm/.stamp
         uv venv
         make standalone
+        mkdir -p releases/MoonGRES/nightly/Linux-x86_64/
+        tar -czf releases/MoonGRES/nightly/Linux-x86_64/rustica-engine.tar.gz -C dist/usr/bin rustica-engine
 
     - uses: actions/upload-artifact@v4
       with:
-        name: standalone
-        path: dist/usr/bin/rustica-engine
+        name: standalone-Linux-x86_64
+        path: releases
 
+  upload-standalone:
+    runs-on: ubuntu-latest
+    needs: build-standalone
+
+    steps:
+
+    - name: Download standalone artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: standalone-*
+        merge-multiple: true
+        path: releases
+
+    - name: Install rclone
+      run: |
+        sudo -v ; curl https://rclone.org/install.sh | sudo bash
+
+    - name: Configure rclone
+      run: |
+        mkdir -p ~/.config/rclone
+        cat > ~/.config/rclone/rclone.conf << EOF
+        [r2]
+        type = s3
+        provider = Cloudflare
+        access_key_id = ${{ secrets.R2_ACCESS_KEY_ID }}
+        secret_access_key = ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        endpoint = ${{ secrets.R2_ENDPOINT }}
+        acl = public-read
+        EOF
+
+    - name: Upload to R2
+      run: |
+        rclone copy releases r2:${{ secrets.R2_BUCKET_NAME }} --progress
