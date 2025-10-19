@@ -162,7 +162,7 @@ if get_option('embed_libs')
             'build-findfs=disabled',
         ],
     )
-    subproject('icu', default_options: ['default_library=static'])
+    icu = subproject('icu', default_options: ['default_library=static'])
     subproject('openssl', default_options: ['default_library=static'])
 endif
 
@@ -280,6 +280,9 @@ rustica_shared = files(
     'src/rustica/adt/text.c',
 )
 rustica_deps = [vmlib, pg.get_variable('uuid')]
+if get_option('embed_libs')
+    rustica_deps += [icu.get_variable('icudata_dep')]
+endif
 rustica_cargs = wamr.get_cmake_definitions('-DWASM')
 
 executable('rustica-engine',
