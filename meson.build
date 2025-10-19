@@ -280,8 +280,9 @@ rustica_shared = files(
     'src/rustica/adt/text.c',
 )
 rustica_deps = [vmlib, pg.get_variable('uuid')]
+rustica_link_whole = []
 if get_option('embed_libs')
-    rustica_deps += [icu.get_variable('icudata_dep')]
+    rustica_link_whole += [icu.get_variable('icudata')]
 endif
 rustica_cargs = wamr.get_cmake_definitions('-DWASM')
 
@@ -301,6 +302,7 @@ executable('rustica-engine',
         get_option('embed_libs') ? ['-static-libstdc++', '-static-libgcc'] : []
     ),
     link_with: backend_link_with,
+    link_whole: rustica_link_whole,
     link_depends: pg.get_variable('backend_link_depends'),
     export_dynamic: true,
     implib: 'postgres',
