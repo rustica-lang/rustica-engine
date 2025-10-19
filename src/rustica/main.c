@@ -7,6 +7,7 @@
 #include "mb/pg_wchar.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "unicode/udata.h"
 
 #include "bh_platform.h"
 #include "bh_read_file.h"
@@ -124,6 +125,7 @@ int
 main(int argc, char *argv[]) {
     bool use_aot = true;
     int rv = 0;
+    UErrorCode ustatus = U_ZERO_ERROR;
 
     progname = get_progname(argv[0]);
 
@@ -143,6 +145,11 @@ main(int argc, char *argv[]) {
     SetDatabaseEncoding(PG_UTF8);
 
     // Initialize default_locale with ICU collator
+    udata_setFileAccess(UDATA_NO_FILES, &ustatus);
+    if (U_FAILURE(ustatus)) {
+        fprintf(stderr, "ERROR: Failed to set ICU file access mode: %s\n", u_errorName(ustatus));
+        return -1;
+    }
     default_locale.provider = COLLPROVIDER_ICU;
     default_locale.deterministic = true;
     make_icu_collator("", NULL, &default_locale);
